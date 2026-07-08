@@ -24,8 +24,34 @@ Configuration is loaded from environment variables. See `.env.example` for local
 
 ## Supabase Contract
 
-The initial Postgres schema lives in
+Supabase is managed through the Supabase CLI. The local project config lives in
+`supabase/config.toml`, and the initial schema migration lives in
 `supabase/migrations/20260708232058_initial_call_schema.sql`.
+
+Local setup:
+
+```sh
+docker info
+supabase start
+supabase db reset
+```
+
+`supabase start` requires Docker Desktop to be running. The CLI applies pending
+migrations when the local stack starts, and `supabase db reset` recreates the
+local database from the committed migrations.
+
+Remote setup:
+
+```sh
+supabase login
+supabase link --project-ref <project-ref>
+supabase db push
+```
+
+CI should run the same migration command after merge, with
+`SUPABASE_ACCESS_TOKEN`, `SUPABASE_DB_PASSWORD`, and the linked project config
+available to the job. Do not make schema changes directly in the Supabase
+Dashboard once migrations are in use.
 
 Schema decisions:
 
@@ -47,6 +73,8 @@ Supabase Storage contract:
 - Bucket name: `call-audio`.
 - Access: private; only backend and worker service credentials should access
   audio.
+- Creation: managed by the SQL migration through `storage.buckets`; no manual
+  dashboard step is required.
 - Path convention:
   `calls/{call_id}/{original_filename_slug}-{upload_token}.{ext}`.
 - Persisted metadata: `storage_bucket`, `storage_path`, `content_type`,

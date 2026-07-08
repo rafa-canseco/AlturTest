@@ -11,6 +11,32 @@
 
 create extension if not exists pgcrypto;
 
+insert into storage.buckets (
+    id,
+    name,
+    public,
+    file_size_limit,
+    allowed_mime_types
+)
+values (
+    'call-audio',
+    'call-audio',
+    false,
+    524288000,
+    array[
+        'audio/mpeg',
+        'audio/mp3',
+        'audio/wav',
+        'audio/wave',
+        'audio/x-wav'
+    ]
+)
+on conflict (id) do update set
+    name = excluded.name,
+    public = excluded.public,
+    file_size_limit = excluded.file_size_limit,
+    allowed_mime_types = excluded.allowed_mime_types;
+
 do $$
 begin
     create type call_status as enum ('queued', 'processing', 'completed', 'failed');
