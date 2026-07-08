@@ -4,6 +4,9 @@ These rules apply to files under `frontend/`.
 
 ## Scope
 
+- Before editing frontend files, create or switch to a clean branch for the active Linear ticket.
+- Frontend agents must only perform frontend-owned work assigned to them.
+- Do not edit backend, docs, or holdout files unless the orchestrator explicitly approves it for the active ticket.
 - Use React and Vite.
 - Use `bun` for package management and scripts.
 - Build the actual application workflow, not a marketing page.

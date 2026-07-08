@@ -4,6 +4,9 @@ These rules apply to files under `docs/`.
 
 ## Scope
 
+- Before editing docs files, create or switch to a clean branch for the active Linear ticket.
+- Docs agents must only perform docs/architecture-owned work assigned to them.
+- Do not edit backend, frontend, or holdout files unless the orchestrator explicitly approves it for the active ticket.
 - Documentation must help the reviewer run, evaluate, and discuss the project.
 - Prefer concrete decisions and tradeoffs over generic explanations.
 - Keep take-home time constraints visible.

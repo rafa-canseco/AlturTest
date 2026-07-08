@@ -9,6 +9,9 @@ The holdout suite exists to evaluate AI output quality without leaking the expec
 - Only the evaluator and orchestrator may open, read, search, diff, or modify files under `holdout/`.
 - All other AI instances must treat `holdout/` as off limits, even for public-looking files.
 - If another instance needs holdout feedback, it must ask the orchestrator for a filtered summary.
+- Before editing holdout files, the evaluator must create or switch to a clean branch for the active Linear ticket.
+- Evaluator agents must only perform holdout/evaluation-owned work assigned to them.
+- Do not edit backend, frontend, or docs files unless the orchestrator explicitly approves it for the active ticket.
 
 ## Roles
 
