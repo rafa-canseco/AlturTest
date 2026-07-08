@@ -6,20 +6,44 @@ Global rules for every AI instance working in this repository.
 
 - This session is the orchestrator.
 - Every implementation instance must work from exactly one Linear ticket.
+- Every instance must work only within its assigned area and ticket scope.
+- Instances must not perform work owned by another instance.
 - Every change must be small enough to review in one pass.
 - Do not combine unrelated tickets in one branch, commit, or PR.
 - Do not implement work that is not required by the active ticket.
 - Stop and ask the orchestrator when scope, ownership, or requirements are unclear.
+
+## Instance Ownership
+
+- Setup agents may only work on monorepo/tooling setup tickets.
+- Backend agents may only work on backend/API/worker/provider tickets assigned to them.
+- Frontend agents may only work on frontend/UI/client tickets assigned to them.
+- Evaluator agents may only work on holdout/evaluation/testing tickets assigned to them.
+- Architect/docs agents may only work on architecture and documentation tickets assigned to them.
+- If a ticket requires changes across areas, the orchestrator must split the work or explicitly approve the cross-area change.
+- Do not opportunistically fix, refactor, format, or scaffold another instance's area.
 
 ## Required Workflow
 
 1. Read this root `AGENTS.md`.
 2. Read the scoped `AGENTS.md` for the area being changed, if one exists.
 3. Confirm the active Linear ticket and intended file scope.
-4. Make the smallest coherent change.
-5. Run the relevant checks for the touched area.
-6. Commit with a ticket-aware, reviewable message.
-7. Produce a PR-ready summary.
+4. Start from an up-to-date `main`.
+5. Create a fresh branch for the active ticket before editing files.
+6. Make the smallest coherent change.
+7. Run the relevant checks for the touched area.
+8. Commit with a ticket-aware, reviewable message.
+9. Produce a PR-ready summary.
+
+## Branch Discipline
+
+- Create a new branch before starting any ticket work.
+- Branch names must include the Linear ticket ID, for example `rafacanseco/alt-17-set-up-backend-fastapi-project-with-uv`.
+- Never work on multiple Linear tickets in the same branch.
+- Never start a ticket from a dirty working tree.
+- If unrelated files are already changed or untracked, stop and ask the orchestrator before continuing.
+- Do not leave ticket work as untracked files for another branch to pick up.
+- Do not switch tickets by continuing in the current branch.
 
 ## PR-Ready Summary
 

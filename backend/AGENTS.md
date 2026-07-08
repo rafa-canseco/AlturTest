@@ -4,6 +4,9 @@ These rules apply to files under `backend/`.
 
 ## Scope
 
+- Before editing backend files, create or switch to a clean branch for the active Linear ticket.
+- Backend agents must only perform backend-owned work assigned to them.
+- Do not edit frontend, docs, or holdout files unless the orchestrator explicitly approves it for the active ticket.
 - Use FastAPI for the HTTP API.
 - Use `uv` for dependency management, scripts, and tests.
 - Keep API handlers thin; put business logic in services.
