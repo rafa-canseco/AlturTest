@@ -1,0 +1,1 @@
+"""Altur backend application package."""
