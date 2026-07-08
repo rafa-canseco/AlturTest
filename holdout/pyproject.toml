@@ -1,0 +1,20 @@
+[project]
+name = "altur-holdout"
+version = "0.1.0"
+description = "Holdout evaluation tooling for Altur call analyzer."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+holdout-evaluate = "holdout_evaluator.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+package = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/holdout_evaluator"]
