@@ -64,8 +64,8 @@ Every AI instance must report:
 
 ## Holdout Boundary
 
+- Hard rule: non-evaluator instances must not open, read, search, diff, or modify anything under `holdout/`.
 - Implementation agents must not inspect holdout expected outputs, scoring keys, or private evaluator fixtures.
 - Only the evaluator/orchestrator may inspect or modify hidden expected outputs and scoring logic.
 - Implementation agents may receive aggregate failures and behavioral guidance from the orchestrator.
 - Never paste hidden expected outputs into prompts, implementation notes, or PR summaries.
-

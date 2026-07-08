@@ -27,7 +27,7 @@ These rules apply to files under `backend/`.
 
 ## Holdout Boundary
 
+- Hard rule: backend agents must not open, read, search, diff, or modify anything under `holdout/`.
 - Backend agents may run public unit/integration tests.
 - Backend agents must not open holdout expected outputs or scoring internals.
 - If holdout evaluation fails, wait for orchestrator-provided failure summaries.
-

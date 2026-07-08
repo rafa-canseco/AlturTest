@@ -30,6 +30,6 @@ These rules apply to files under `frontend/`.
 
 ## Holdout Boundary
 
+- Hard rule: frontend agents must not open, read, search, diff, or modify anything under `holdout/`.
 - Frontend agents should not inspect holdout tests, expected outputs, or scoring internals.
 - Frontend work should be validated through UI behavior and API contracts, not holdout answers.
-

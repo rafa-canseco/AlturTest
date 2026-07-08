@@ -24,7 +24,7 @@ These rules apply to files under `docs/`.
 
 ## Holdout Boundary
 
+- Hard rule: docs agents must not open, read, search, diff, or modify anything under `holdout/`.
 - Docs may explain the evaluation process.
 - Docs must not reveal private expected outputs, hidden rubrics, or scoring keys.
 - Public examples must be synthetic and safe to expose.
-

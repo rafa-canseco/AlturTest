@@ -4,6 +4,12 @@ These rules apply to files under `holdout/`.
 
 The holdout suite exists to evaluate AI output quality without leaking the expected answers to the implementation agents or the model being evaluated.
 
+## Hard Access Rule
+
+- Only the evaluator and orchestrator may open, read, search, diff, or modify files under `holdout/`.
+- All other AI instances must treat `holdout/` as off limits, even for public-looking files.
+- If another instance needs holdout feedback, it must ask the orchestrator for a filtered summary.
+
 ## Roles
 
 ### Evaluator
@@ -89,4 +95,3 @@ Reports should favor aggregate signals:
 - regressions by prompt version.
 
 Reports should not expose private expected answers unless the orchestrator explicitly opens an evaluator-only review.
-
