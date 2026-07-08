@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     supabase_url: str | None = None
     supabase_service_role_key: str | None = None
     supabase_storage_bucket: str = "call-audio"
+    max_call_upload_bytes: int = 524_288_000
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
