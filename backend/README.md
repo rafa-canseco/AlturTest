@@ -59,7 +59,9 @@ Schema decisions:
   location, status, and client-safe failure fields.
 - `call_processing_jobs` is a Postgres-backed queue. Workers should claim
   queued jobs in a transaction with `FOR UPDATE SKIP LOCKED`.
-- `call_analysis` stores one validated STT/LLM result per call, including
+- `call_transcripts` stores one validated STT result per call. This lets the
+  worker preserve transcript value when STT succeeds but LLM analysis fails.
+- `call_analysis` stores one validated LLM result per call, including
   prompt/model metadata and the raw structured LLM payload for debugging.
 - `tag_overrides` stores human corrections separately from model output.
 - `processing_events` is intentionally lightweight and only for status or
@@ -67,6 +69,9 @@ Schema decisions:
 
 Allowed call statuses are `queued`, `processing`, `completed`, and `failed`.
 Allowed job statuses are `queued`, `processing`, `completed`, and `failed`.
+When retrying a failed call or job, worker code must clear the corresponding
+failure fields (`failed_at`, error code, and error message) before moving it
+back to `queued` or `processing`.
 
 Supabase Storage contract:
 

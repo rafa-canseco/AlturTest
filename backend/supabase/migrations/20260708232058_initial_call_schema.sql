@@ -149,11 +149,28 @@ before update on call_processing_jobs
 for each row
 execute function set_updated_at();
 
-create table if not exists call_analysis (
+create table if not exists call_transcripts (
     id uuid primary key default gen_random_uuid(),
     call_id uuid not null references calls(id) on delete cascade,
     transcript text not null,
     transcript_metadata jsonb not null default '{}'::jsonb,
+    stt_provider text not null,
+    stt_model text,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    unique (call_id),
+    check (jsonb_typeof(transcript_metadata) = 'object')
+);
+
+drop trigger if exists call_transcripts_set_updated_at on call_transcripts;
+create trigger call_transcripts_set_updated_at
+before update on call_transcripts
+for each row
+execute function set_updated_at();
+
+create table if not exists call_analysis (
+    id uuid primary key default gen_random_uuid(),
+    call_id uuid not null references calls(id) on delete cascade,
     summary text not null,
     tags jsonb not null default '{}'::jsonb,
     intent text,
@@ -172,8 +189,6 @@ create table if not exists call_analysis (
         )
     ),
     risk_flags jsonb not null default '[]'::jsonb,
-    stt_provider text not null,
-    stt_model text,
     llm_provider text not null,
     llm_model text not null,
     prompt_version text not null,
@@ -181,7 +196,6 @@ create table if not exists call_analysis (
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now(),
     unique (call_id),
-    check (jsonb_typeof(transcript_metadata) = 'object'),
     check (jsonb_typeof(tags) = 'object'),
     check (jsonb_typeof(risk_flags) = 'array')
 );
@@ -245,6 +259,9 @@ create index if not exists idx_call_processing_jobs_claim
 
 create index if not exists idx_call_processing_jobs_call_id
     on call_processing_jobs (call_id);
+
+create index if not exists idx_call_transcripts_call_id
+    on call_transcripts (call_id);
 
 create index if not exists idx_call_analysis_call_id
     on call_analysis (call_id);
