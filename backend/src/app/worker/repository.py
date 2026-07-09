@@ -16,7 +16,12 @@ class WorkerRepositoryError(Exception):
 
 
 class WorkerRepository(Protocol):
-    def claim_next_job(self, *, worker_id: str) -> ClaimedCallProcessingJob | None:
+    def claim_next_job(
+        self,
+        *,
+        worker_id: str,
+        transcript_exists: bool | None = None,
+    ) -> ClaimedCallProcessingJob | None:
         pass
 
     def complete_job(self, *, job_id: UUID, call_id: UUID) -> None:
@@ -50,7 +55,12 @@ class PostgresWorkerRepository:
     def __init__(self, database_url: str) -> None:
         self._database_url = database_url
 
-    def claim_next_job(self, *, worker_id: str) -> ClaimedCallProcessingJob | None:
+    def claim_next_job(
+        self,
+        *,
+        worker_id: str,
+        transcript_exists: bool | None = None,
+    ) -> ClaimedCallProcessingJob | None:
         try:
             with connect(self._database_url, row_factory=dict_row) as conn:
                 with conn.transaction():
@@ -70,10 +80,19 @@ class PostgresWorkerRepository:
                               and j.available_at <= now()
                               and j.attempt_count < j.max_attempts
                               and c.status <> 'completed'
+                              and (
+                                  %(transcript_exists)s::boolean is null
+                                  or exists (
+                                      select 1
+                                      from call_transcripts t
+                                      where t.call_id = j.call_id
+                                  ) = %(transcript_exists)s
+                              )
                             order by j.available_at asc, j.created_at asc
                             for update of j skip locked
                             limit 1
-                            """
+                            """,
+                            {"transcript_exists": transcript_exists},
                         )
                         job_row = cur.fetchone()
                         if job_row is None:

@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from app.calls.models import CallProcessingJobRecord, CallRecord, ClaimedCallProcessingJob
-from app.worker.__main__ import _build_processor
+from app.worker.__main__ import _build_processor, _claim_transcript_exists
 from app.worker.processor import (
     CallProcessorError,
     FakeCallProcessor,
@@ -26,7 +26,7 @@ def test_worker_claims_processes_and_completes_job() -> None:
     did_work = service.run_once(worker_id="worker-a")
 
     assert did_work is True
-    assert repository.claim_worker_ids == ["worker-a"]
+    assert repository.claims == [{"worker_id": "worker-a", "transcript_exists": None}]
     assert processor.processed_jobs == [claimed_job]
     assert repository.completed_jobs == [(claimed_job.job.id, claimed_job.call.id)]
     assert repository.analysis_ready_jobs == []
@@ -45,6 +45,22 @@ def test_worker_returns_false_when_no_job_is_available() -> None:
     assert repository.completed_jobs == []
     assert repository.analysis_ready_jobs == []
     assert repository.failed_jobs == []
+
+
+def test_worker_passes_transcript_exists_claim_filter() -> None:
+    claimed_job = _claimed_job()
+    repository = FakeWorkerRepository(claimed_job=claimed_job)
+    processor = FakeProcessor()
+    service = WorkerService(
+        repository=repository,
+        processor=processor,
+        claim_transcript_exists=False,
+    )
+
+    did_work = service.run_once(worker_id="worker-a")
+
+    assert did_work is True
+    assert repository.claims == [{"worker_id": "worker-a", "transcript_exists": False}]
 
 
 def test_worker_marks_job_failed_when_processor_reports_expected_failure() -> None:
@@ -194,6 +210,41 @@ def test_transcription_processor_existing_transcript_does_not_duplicate() -> Non
     assert repository.failed_jobs == []
 
 
+def test_stt_worker_does_not_reclaim_job_after_transcript_exists() -> None:
+    claimed_job = _claimed_job()
+    repository = FakeWorkerRepository(claimed_job=claimed_job)
+    storage = FakeCallStorage(audio=b"fake-audio")
+    stt_client = FakeSTTClient(
+        transcription=Transcription(
+            text="Customer wants a demo.",
+            provider="elevenlabs",
+            model="scribe_v1",
+            metadata={},
+        )
+    )
+    service = WorkerService(
+        repository=repository,
+        processor=TranscriptionProcessor(
+            repository=repository,
+            storage=storage,
+            stt_client=stt_client,
+        ),
+        claim_transcript_exists=False,
+    )
+
+    first_tick = service.run_once(worker_id="worker-a")
+    second_tick = service.run_once(worker_id="worker-a")
+
+    assert first_tick is True
+    assert second_tick is False
+    assert len(stt_client.requests) == 1
+    assert repository.analysis_ready_jobs == [(claimed_job.job.id, claimed_job.call.id)]
+    assert repository.claims == [
+        {"worker_id": "worker-a", "transcript_exists": False},
+        {"worker_id": "worker-a", "transcript_exists": False},
+    ]
+
+
 def test_default_cli_processor_fails_jobs_instead_of_completing_without_real_processor() -> None:
     claimed_job = _claimed_job()
     repository = FakeWorkerRepository(claimed_job=claimed_job)
@@ -234,6 +285,24 @@ def test_cli_builds_transcription_processor_when_required_env_is_present() -> No
     assert isinstance(processor, TranscriptionProcessor)
 
 
+def test_cli_transcription_processor_claims_only_jobs_without_transcript() -> None:
+    processor = _build_processor(
+        use_dev_fake=False,
+        repository=FakeWorkerRepository(claimed_job=None),
+        supabase_url="http://supabase.local",
+        supabase_service_role_key="fake-service-role",
+        elevenlabs_api_key="fake-elevenlabs-key",
+        elevenlabs_stt_model_id="scribe_v1",
+    )
+
+    assert _claim_transcript_exists(use_dev_fake=False, processor=processor) is False
+    assert _claim_transcript_exists(use_dev_fake=True, processor=FakeCallProcessor()) is None
+    assert (
+        _claim_transcript_exists(use_dev_fake=False, processor=NotConfiguredCallProcessor())
+        is None
+    )
+
+
 def test_postgres_worker_repository_uses_skip_locked_claim_and_clears_retry_fields() -> None:
     names = PostgresWorkerRepository.claim_next_job.__code__.co_names
     constants = "\n".join(
@@ -245,6 +314,7 @@ def test_postgres_worker_repository_uses_skip_locked_claim_and_clears_retry_fiel
     assert "for update of j skip locked" in constants
     assert "call_transcripts" in constants
     assert "transcript_exists" in constants
+    assert "%(transcript_exists)s::boolean is null" in constants
     assert "failed_at = null" in constants
     assert "last_error_code = null" in constants
     assert "last_error_message = null" in constants
@@ -291,14 +361,22 @@ class FakeWorkerRepository:
     ) -> None:
         self.claimed_job = claimed_job
         self.existing_transcript = existing_transcript
-        self.claim_worker_ids: list[str] = []
+        self.claims: list[dict[str, object]] = []
         self.completed_jobs: list[tuple[UUID, UUID]] = []
         self.analysis_ready_jobs: list[tuple[UUID, UUID]] = []
         self.failed_jobs: list[tuple[UUID, UUID, str, str]] = []
         self.created_transcripts: list[dict[str, object]] = []
 
-    def claim_next_job(self, *, worker_id: str) -> ClaimedCallProcessingJob | None:
-        self.claim_worker_ids.append(worker_id)
+    def claim_next_job(
+        self,
+        *,
+        worker_id: str,
+        transcript_exists: bool | None = None,
+    ) -> ClaimedCallProcessingJob | None:
+        self.claims.append({"worker_id": worker_id, "transcript_exists": transcript_exists})
+        if transcript_exists is not None and self.claimed_job is not None:
+            if self.claimed_job.transcript_exists != transcript_exists:
+                return None
         return self.claimed_job
 
     def complete_job(self, *, job_id: UUID, call_id: UUID) -> None:
@@ -306,6 +384,12 @@ class FakeWorkerRepository:
 
     def mark_job_ready_for_analysis(self, *, job_id: UUID, call_id: UUID) -> None:
         self.analysis_ready_jobs.append((job_id, call_id))
+        if self.claimed_job is not None:
+            self.claimed_job = ClaimedCallProcessingJob(
+                job=self.claimed_job.job,
+                call=self.claimed_job.call,
+                transcript_exists=True,
+            )
 
     def fail_job(self, *, job_id: UUID, call_id: UUID, error_code: str, error_message: str) -> None:
         self.failed_jobs.append((job_id, call_id, error_code, error_message))

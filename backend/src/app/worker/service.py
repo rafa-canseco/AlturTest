@@ -10,12 +10,22 @@ logger = logging.getLogger(__name__)
 
 
 class WorkerService:
-    def __init__(self, *, repository: WorkerRepository, processor: CallProcessor) -> None:
+    def __init__(
+        self,
+        *,
+        repository: WorkerRepository,
+        processor: CallProcessor,
+        claim_transcript_exists: bool | None = None,
+    ) -> None:
         self._repository = repository
         self._processor = processor
+        self._claim_transcript_exists = claim_transcript_exists
 
     def run_once(self, *, worker_id: str) -> bool:
-        claimed_job = self._repository.claim_next_job(worker_id=worker_id)
+        claimed_job = self._repository.claim_next_job(
+            worker_id=worker_id,
+            transcript_exists=self._claim_transcript_exists,
+        )
         if claimed_job is None:
             return False
 

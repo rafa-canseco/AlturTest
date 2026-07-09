@@ -33,15 +33,20 @@ def main() -> None:
         raise SystemExit("DATABASE_URL is required to run the worker")
 
     repository = PostgresWorkerRepository(settings.database_url)
+    processor = _build_processor(
+        use_dev_fake=args.dev_fake_processor,
+        repository=repository,
+        supabase_url=settings.supabase_url,
+        supabase_service_role_key=settings.supabase_service_role_key,
+        elevenlabs_api_key=settings.elevenlabs_api_key,
+        elevenlabs_stt_model_id=settings.elevenlabs_stt_model_id,
+    )
     service = WorkerService(
         repository=repository,
-        processor=_build_processor(
+        processor=processor,
+        claim_transcript_exists=_claim_transcript_exists(
             use_dev_fake=args.dev_fake_processor,
-            repository=repository,
-            supabase_url=settings.supabase_url,
-            supabase_service_role_key=settings.supabase_service_role_key,
-            elevenlabs_api_key=settings.elevenlabs_api_key,
-            elevenlabs_stt_model_id=settings.elevenlabs_stt_model_id,
+            processor=processor,
         ),
     )
     processed = 0
@@ -79,6 +84,14 @@ def _build_processor(
             ),
         )
     return NotConfiguredCallProcessor()
+
+
+def _claim_transcript_exists(*, use_dev_fake: bool, processor: CallProcessor) -> bool | None:
+    if use_dev_fake:
+        return None
+    if isinstance(processor, TranscriptionProcessor):
+        return False
+    return None
 
 
 if __name__ == "__main__":

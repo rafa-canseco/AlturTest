@@ -67,8 +67,9 @@ Storage, sends it to ElevenLabs Speech to Text, stores one transcript in
 `call_transcripts`, leaves the call in `processing`, and requeues the job for
 the later LLM analysis step. ALT-11 should branch on the existing transcript and
 run analysis instead of STT; claimed jobs include a `transcript_exists` flag for
-that handoff. OpenAI/LLM analysis and `call_analysis` writes are intentionally
-not implemented yet.
+that handoff. The STT worker claims only jobs where `transcript_exists=false`,
+so queued analysis jobs are not consumed by the STT processor. OpenAI/LLM
+analysis and `call_analysis` writes are intentionally not implemented yet.
 
 ## Supabase Contract
 
