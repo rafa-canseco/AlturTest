@@ -281,6 +281,8 @@ function App() {
     [calls],
   );
 
+  const activeCallCount = statusCounts.queued + statusCounts.processing;
+
   const handleUpload = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!selectedFile) {
@@ -335,19 +337,47 @@ function App() {
   return (
     <main className="app-shell" data-api-base-url={config.apiBaseUrl}>
       <header className="top-bar">
-        <div>
-          <p className="eyebrow">Altur / Calls</p>
-          <h1>Call operations</h1>
+        <div className="brand-block">
+          <span className="brand-mark" aria-hidden="true">
+            A
+          </span>
+          <div>
+            <p className="eyebrow">Altur / Operations</p>
+            <h1>Call processing console</h1>
+            <p className="header-copy">
+              Upload audio, monitor queue progress, and review call outcomes.
+            </p>
+          </div>
         </div>
-        <button className="secondary-button" type="button" onClick={loadCalls}>
-          Refresh
-        </button>
+        <div className="header-actions">
+          <dl className="header-metrics" aria-label="Call queue summary">
+            <div>
+              <dt>Active</dt>
+              <dd>{activeCallCount}</dd>
+            </div>
+            <div>
+              <dt>Completed</dt>
+              <dd>{statusCounts.completed}</dd>
+            </div>
+          </dl>
+          <button
+            aria-label="Refresh calls"
+            className="secondary-button"
+            type="button"
+            onClick={loadCalls}
+          >
+            Refresh
+          </button>
+        </div>
       </header>
 
       <section className="workspace" aria-label="Call processing workspace">
         <aside className="left-rail" aria-label="Upload and call list">
           <form className="upload-panel" onSubmit={handleUpload}>
-            <label>Audio file</label>
+            <div className="section-heading compact">
+              <h2>Upload</h2>
+              <span>WAV or MP3</span>
+            </div>
             <Dropzone
               file={selectedFile}
               onFileChange={(file) => {
@@ -395,6 +425,7 @@ function App() {
                 <button
                   className="call-row"
                   data-active={call.id === selectedCallId}
+                  aria-pressed={call.id === selectedCallId}
                   key={call.id}
                   type="button"
                   onClick={() => setSelectedCallId(call.id)}
@@ -429,7 +460,7 @@ function App() {
                 <div>
                   <p className="eyebrow">Call detail</p>
                   <h2>{displayedCall.filename}</h2>
-                  <p>{displayedCall.id}</p>
+                  <p>Call ID {displayedCall.id}</p>
                 </div>
                 <span className={`status-badge status-${displayedCall.status}`}>
                   {STATUS_LABELS[displayedCall.status]}
