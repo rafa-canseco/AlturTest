@@ -5,7 +5,14 @@ from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
 
-from app.calls.models import CallCreate, CallRecord, StoredObject
+from app.calls.models import (
+    CallAnalysisRecord,
+    CallCreate,
+    CallDetailRecord,
+    CallRecord,
+    CallTranscriptRecord,
+    StoredObject,
+)
 from app.calls.repository import CallRepositoryError
 from app.calls.storage import CallStorageError
 from app.config import Settings
@@ -146,7 +153,7 @@ def test_list_calls_returns_safe_error_when_repository_unconfigured() -> None:
     assert response.json()["detail"] == "Could not list calls"
 
 
-def test_get_call_returns_call_detail() -> None:
+def test_get_call_returns_call_detail_without_results() -> None:
     call = _record(original_filename="sales.mp3")
     repository = FakeCallRepository(records=[call])
     client = _client(repository=repository, storage=FakeCallStorage())
@@ -161,6 +168,95 @@ def test_get_call_returns_call_detail() -> None:
     assert body["storage_path"] == call.storage_path
     assert body["created_at"] is not None
     assert body["updated_at"] is not None
+    assert body["transcript"] is None
+    assert body["analysis"] is None
+
+
+def test_get_call_returns_detail_with_transcript_without_analysis() -> None:
+    call = _record(original_filename="sales.mp3", status="processing")
+    transcript = _transcript_record(
+        call_id=call.id,
+        transcript="Customer wants pricing.",
+        metadata={"language_code": "en"},
+    )
+    repository = FakeCallRepository(
+        records=[call],
+        details={call.id: CallDetailRecord(call=call, transcript=transcript)},
+    )
+    client = _client(repository=repository, storage=FakeCallStorage())
+
+    response = client.get(f"/calls/{call.id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "processing"
+    assert body["transcript"] == {
+        "text": "Customer wants pricing.",
+        "provider": "elevenlabs",
+        "model": "scribe_v1",
+        "language_code": "en",
+        "metadata": {"language_code": "en"},
+        "created_at": "2026-07-08T12:00:00Z",
+        "updated_at": "2026-07-08T12:00:00Z",
+    }
+    assert body["analysis"] is None
+
+
+def test_get_call_returns_detail_with_transcript_and_analysis() -> None:
+    call = _record(original_filename="sales.mp3", status="completed")
+    transcript = _transcript_record(call_id=call.id)
+    analysis = _analysis_record(call_id=call.id)
+    repository = FakeCallRepository(
+        records=[call],
+        details={call.id: CallDetailRecord(call=call, transcript=transcript, analysis=analysis)},
+    )
+    client = _client(repository=repository, storage=FakeCallStorage())
+
+    response = client.get(f"/calls/{call.id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "completed"
+    assert body["transcript"]["text"] == "Customer wants a demo."
+    assert body["analysis"] == {
+        "summary": "Customer requested a product demo.",
+        "tags": {"customer_intent": "demo"},
+        "intent": "demo",
+        "sentiment": "positive",
+        "next_action": "schedule_demo",
+        "risk_flags": ["pricing_objection"],
+        "provider": "openai",
+        "model": "gpt-4.1-mini",
+        "prompt_version": "call-analysis-v1",
+        "raw_output": {"summary": "Customer requested a product demo."},
+        "created_at": "2026-07-08T12:00:00Z",
+        "updated_at": "2026-07-08T12:00:00Z",
+    }
+
+
+def test_get_call_returns_failed_detail_with_partial_transcript() -> None:
+    call = _record(
+        original_filename="sales.mp3",
+        status="failed",
+        error_code="analysis_failed",
+        error_message="Transcript analysis failed",
+        failed_at=_dt("2026-07-08T12:05:00+00:00"),
+    )
+    transcript = _transcript_record(call_id=call.id)
+    repository = FakeCallRepository(
+        records=[call],
+        details={call.id: CallDetailRecord(call=call, transcript=transcript)},
+    )
+    client = _client(repository=repository, storage=FakeCallStorage())
+
+    response = client.get(f"/calls/{call.id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "failed"
+    assert body["error_code"] == "analysis_failed"
+    assert body["transcript"]["text"] == "Customer wants a demo."
+    assert body["analysis"] is None
 
 
 def test_get_call_returns_404_when_missing() -> None:
@@ -172,18 +268,32 @@ def test_get_call_returns_404_when_missing() -> None:
     assert response.json()["detail"] == "Call not found"
 
 
+def test_get_call_returns_safe_error_when_repository_fails() -> None:
+    repository = FakeCallRepository(fail_detail=True)
+    client = _client(repository=repository, storage=FakeCallStorage())
+
+    response = client.get(f"/calls/{uuid4()}")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Could not load call"
+
+
 class FakeCallRepository:
     def __init__(
         self,
         *,
         records: list[CallRecord] | None = None,
+        details: dict[UUID, CallDetailRecord] | None = None,
         fail_create: bool = False,
+        fail_detail: bool = False,
     ) -> None:
         self.records = {record.id: record for record in records or []}
+        self.details = details or {}
         self.created_calls: list[CallCreate] = []
         self.created_jobs: list[UUID] = []
         self.list_limits: list[int] = []
         self.fail_create = fail_create
+        self.fail_detail = fail_detail
 
     def create_call_with_queued_job(self, call: CallCreate) -> CallRecord:
         self.created_calls.append(call)
@@ -210,6 +320,14 @@ class FakeCallRepository:
 
     def get_call(self, call_id: UUID) -> CallRecord | None:
         return self.records.get(call_id)
+
+    def get_call_detail(self, call_id: UUID) -> CallDetailRecord | None:
+        if self.fail_detail:
+            raise CallRepositoryError("fake detail failure")
+        if call_id in self.details:
+            return self.details[call_id]
+        call = self.records.get(call_id)
+        return CallDetailRecord(call=call) if call is not None else None
 
 
 class FakeCallStorage:
@@ -267,6 +385,9 @@ def _record(
     storage_etag: str | None = None,
     storage_version: str | None = None,
     status: str = "queued",
+    error_code: str | None = None,
+    error_message: str | None = None,
+    failed_at: datetime | None = None,
     uploaded_at: datetime | None = None,
 ) -> CallRecord:
     call_id = id or uuid4()
@@ -282,6 +403,48 @@ def _record(
         storage_version=storage_version,
         status=status,
         uploaded_at=now,
+        created_at=now,
+        updated_at=now,
+        error_code=error_code,
+        error_message=error_message,
+        failed_at=failed_at,
+    )
+
+
+def _transcript_record(
+    *,
+    call_id: UUID,
+    transcript: str = "Customer wants a demo.",
+    metadata: dict[str, object] | None = None,
+) -> CallTranscriptRecord:
+    now = _dt("2026-07-08T12:00:00+00:00")
+    return CallTranscriptRecord(
+        id=uuid4(),
+        call_id=call_id,
+        transcript=transcript,
+        transcript_metadata=metadata or {},
+        stt_provider="elevenlabs",
+        stt_model="scribe_v1",
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _analysis_record(*, call_id: UUID) -> CallAnalysisRecord:
+    now = _dt("2026-07-08T12:00:00+00:00")
+    return CallAnalysisRecord(
+        id=uuid4(),
+        call_id=call_id,
+        summary="Customer requested a product demo.",
+        tags={"customer_intent": "demo"},
+        intent="demo",
+        sentiment="positive",
+        next_action="schedule_demo",
+        risk_flags=["pricing_objection"],
+        llm_provider="openai",
+        llm_model="gpt-4.1-mini",
+        prompt_version="call-analysis-v1",
+        raw_llm_output={"summary": "Customer requested a product demo."},
         created_at=now,
         updated_at=now,
     )

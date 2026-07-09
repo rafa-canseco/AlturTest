@@ -90,6 +90,31 @@ class CallTranscriptRecord:
 
 
 @dataclass(frozen=True)
+class CallAnalysisRecord:
+    id: UUID
+    call_id: UUID
+    summary: str
+    tags: dict[str, Any]
+    intent: str | None
+    sentiment: str | None
+    next_action: str | None
+    risk_flags: list[str]
+    llm_provider: str
+    llm_model: str
+    prompt_version: str
+    raw_llm_output: dict[str, Any] | None
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class CallDetailRecord:
+    call: CallRecord
+    transcript: CallTranscriptRecord | None = None
+    analysis: CallAnalysisRecord | None = None
+
+
+@dataclass(frozen=True)
 class CallAnalysisCreate:
     call_id: UUID
     summary: str

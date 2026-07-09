@@ -56,6 +56,9 @@ class _UnconfiguredCallRepository:
     def get_call(self, call_id: object) -> None:
         raise CallRepositoryError(self._message)
 
+    def get_call_detail(self, call_id: object) -> None:
+        raise CallRepositoryError(self._message)
+
 
 class _UnconfiguredCallStorage:
     def __init__(self, message: str) -> None:
