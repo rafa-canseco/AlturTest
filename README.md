@@ -358,25 +358,17 @@ Backend tests use fakes for storage, STT, and LLM providers by default. Holdouts
 are evaluator-owned: expected answers stay private, while reports expose only
 aggregate pass/fail, field scores, and mismatched field names.
 
-## Prompt And Tag Quality Strategy
+## Prompt And Evaluation
 
-Prompt version:
+- Prompt version: `altur-analysis-v1`.
+- The LLM returns one aggregate analysis per uploaded call.
+- Output is constrained by JSON schema and validated before persistence.
+- Holdouts keep expected answers private and report only aggregate quality
+  signals: sentiment, next action, summary keywords, risk flags, and tag
+  categories.
 
-```text
-altur-analysis-v1
-```
-
-The prompt asks for one aggregate analysis of the full transcript. If an audio file contains multiple segments, the model must still return one dominant intent and one dominant next action instead of per-call objects. The response is constrained by OpenAI JSON schema and validated locally before `call_analysis` is written.
-
-Quality should be evaluated over time through:
-
-- holdout transcripts with private expected outputs
-- evaluator reports for sentiment, next action, summary keywords, risk flags, and tag categories
-- schema-invalid output rate
-- tag precision and recall by category
-- sampled human review of summaries and tags
-- comparison of generated tags against later human overrides
-- monitoring drift by `prompt_version`, model, language, and call type
+Detailed scale, production, PII, and "more time" answers are in
+[docs/INTERVIEW_ANSWERS.md](docs/INTERVIEW_ANSWERS.md).
 
 ## Error Handling
 
@@ -386,14 +378,3 @@ Quality should be evaluated over time through:
 - Provider failures fail the job with safe error messages and preserve prior successful stages.
 - If STT succeeds but LLM analysis fails, the transcript remains available.
 - Raw provider attempts are stored internally for debugging and are not exposed in the public call detail API.
-
-## What I Would Improve With More Time
-
-- JSON export.
-- Analytics dashboard for status and tag distribution.
-- Speaker role detection if provider diarization is reliable enough.
-- Authentication, tenant isolation, and row-level access controls.
-- PII redaction, retention policies, and deletion workflows.
-- Direct-to-object-storage uploads to avoid buffering large files in the API process.
-- Provider rate limits, concurrency caps, and a dead-letter queue for larger bursts.
-- More holdout cases from real reviewer-labeled transcripts to measure tag quality over time.

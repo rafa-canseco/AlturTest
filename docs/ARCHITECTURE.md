@@ -190,104 +190,22 @@ The separate scalar fields remain useful:
 - `next_action`: the operational action the team should take.
 - `risk_flags`: explicit warnings that need review.
 
-## Evaluating Tag Quality Over Time
+## Scale And Production Notes
 
-A one-off model response is not enough. Tag quality should be measured over time through:
+This document describes the current design. The interview-focused answers for
+scale, bottlenecks, production changes, and PII handling live in
+[INTERVIEW_ANSWERS.md](INTERVIEW_ANSWERS.md). Keeping those answers separate
+avoids duplicating reasoning across README, architecture notes, and the interview
+prep document.
 
-- holdout transcripts with private expected outputs;
-- schema-invalid output rate;
-- tag precision and recall by category;
-- summary factuality sampling;
-- human review of representative calls;
-- comparison between generated tags and later human overrides;
-- drift checks by `prompt_version`, model, language, customer type, and call type.
+The short version:
 
-The evaluator should expose safe aggregate reports, not expected answers. Implementation agents should receive behavioral feedback such as "missing follow-up tag on pricing objection cases", not hidden labels.
-
-## Scaling To 10k Calls Per Day
-
-10k calls/day averages to about 7 calls/minute. The harder problem is burstiness: a user might upload 1,000 recordings in a short window.
-
-The current design scales through:
-
-- lightweight upload API;
-- object-storage-compatible audio storage;
-- Postgres-backed queue with row locks;
-- horizontally scalable STT workers;
-- horizontally scalable analysis workers;
-- separate STT and analysis stages;
-- idempotency keys for safe client retries;
-- audit events for operational visibility.
-
-For 10k/day, the first production version could still use Postgres jobs if provider limits and worker counts are controlled. The operational focus should be worker autoscaling, provider rate limits, queue depth monitoring, and retry/dead-letter behavior.
-
-## Bottlenecks
-
-Likely bottlenecks:
-
-- STT provider latency and rate limits.
-- OpenAI latency, token cost, and rate limits.
-- Audio upload bandwidth and file size.
-- Worker concurrency and CPU/memory for large files.
-- Postgres queue contention during bursts.
-- Frontend polling if many users watch live progress.
-- Storage cost and retention for raw audio.
-- Long transcripts increasing LLM token cost.
-
-Mitigations:
-
-- Use separate worker pools for STT and analysis.
-- Add provider-specific rate limiters.
-- Back off retries and cap attempts.
-- Move to a dedicated queue when queue depth or lock contention grows.
-- Use signed direct-to-object-storage uploads for very large files.
-- Add polling backoff or realtime updates.
-- Add transcript chunking/summarization if calls approach model limits.
-- Track provider latency, error rate, queue depth, and cost per call.
-
-## Production Changes
-
-Before production, I would add:
-
-- authentication and tenant isolation;
-- private object storage with signed URLs;
-- least-privilege credentials and secret management;
-- row-level access controls where appropriate;
-- structured logs and tracing;
-- metrics for queue depth, provider latency, failures, and cost;
-- dead-letter queue or failed-job review workflow;
-- provider concurrency controls;
-- retention and deletion policies;
-- tag override UI and audit trail; currently implemented for the demo, but production would add reviewer identity and approval controls;
-- export/download support for call records;
-- deployment pipeline and environment separation;
-- backup/restore and migration runbooks.
-
-If upload bursts or job volume outgrow Postgres-backed jobs, I would replace `call_processing_jobs` with a managed queue while keeping the worker processor interfaces.
-
-## PII Handling And Storage
-
-Phone calls can contain names, phone numbers, account details, addresses, payment references, and other sensitive data.
-
-Current safeguards:
-
-- Audio files are not stored in Postgres.
-- Client-facing errors are safe and do not include provider internals.
-- Raw provider attempts are internal and not exposed by `GET /calls/{call_id}`.
-- Tests use fake provider data and do not require real customer recordings.
-
-Production requirements:
-
-- Store audio in private buckets only.
-- Use signed URLs or server-side download paths.
-- Encrypt data at rest through managed database/storage defaults and stronger controls where needed.
-- Avoid logging raw audio, transcript text, raw provider payloads, or API keys.
-- Restrict access to transcripts and provider attempts.
-- Add retention policies for audio, transcripts, and raw provider responses.
-- Support deletion and export workflows.
-- Consider PII detection/redaction before analytics or external sharing.
-- Audit manual overrides and administrative access.
-- Separate frontend-safe keys from backend service credentials.
+- upload returns quickly and workers handle provider latency;
+- Postgres jobs are acceptable for the take-home and early production;
+- object storage, separated workers, provider rate limits, DLQ, auth, PII
+  retention/deletion, and observability are the next production hardening steps;
+- holdouts should grow from synthetic cases into reviewer-labeled real
+  transcripts.
 
 ## Failure Handling
 
@@ -305,58 +223,7 @@ The UI should show partial value. A call with a failed analysis but a successful
 
 ## Testing Strategy
 
-Default tests should be deterministic and fast:
-
-- API tests use fake storage/repositories.
-- Worker tests use fake STT and LLM clients.
-- LLM validation tests cover malformed output.
-- Integration tests against local Supabase/Postgres are opt-in.
-- Holdout tests are evaluator-owned and should not leak expected answers.
-
-Commands:
-
-```sh
-cd backend
-uv run pytest
-uv run pytest -m integration
-```
-
-```sh
-cd frontend
-bun run typecheck
-bun run lint
-bun run build
-```
-
-Evaluator-owned:
-
-```sh
-cd holdout
-uv run python -m unittest discover -s tests
-uv run holdout-evaluate \
-  --public-cases-dir public_cases \
-  --actual-dir actual_outputs/baseline \
-  --expected-dir expected \
-  --report reports/baseline.json
-```
-
-## Known Tradeoffs
-
-- Local Docker storage uses disk; the deployed demo uses a Railway volume. Production should use private object storage.
-- The deployed preview runs API and workers in one Railway service for shared audio access. Production should split workers into services backed by object storage.
-- Uploads are bounded and read in chunks, but the current storage abstraction still receives bytes in memory. Production should stream directly to private object storage or use signed direct uploads.
-- No authentication in the current take-home scope.
-- Analytics dashboard is planned but not required for the core submission.
-- Speaker role detection is deferred until diarization quality is verified.
-
-## Next Improvements
-
-Highest-value next items:
-
-1. Direct-to-object-storage uploads and separated deployed worker services.
-2. Provider rate limits, concurrency caps, and dead-letter handling.
-3. JSON export.
-4. Analytics dashboard.
-5. More holdout cases from reviewer-labeled transcripts.
-6. Speaker roles if provider metadata supports it cleanly.
-7. Auth and multi-user isolation.
+Default tests are deterministic and fast: API tests use fake storage/repos,
+worker tests use fake STT/LLM clients, malformed LLM outputs are validated, and
+provider-backed checks are kept out of the default path. Commands are listed in
+the README.
