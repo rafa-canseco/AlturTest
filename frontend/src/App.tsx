@@ -38,6 +38,23 @@ type ProcessingDiagnostics = {
   lastErrorMessage?: string;
 };
 
+type TagOverrideField =
+  | "call_outcome"
+  | "customer_intent"
+  | "sentiment"
+  | "next_action"
+  | "risk_flags";
+
+type TagOverride = {
+  id: string;
+  field: TagOverrideField;
+  originalValue?: unknown;
+  overrideValue: unknown;
+  reason?: string;
+  createdBy?: string;
+  createdAt?: string;
+};
+
 type CallDetail = CallSummary & {
   transcript?: string;
   analysis?: unknown;
@@ -47,6 +64,7 @@ type CallDetail = CallSummary & {
 };
 
 type LoadState = "idle" | "loading" | "ready" | "error";
+type SaveState = "idle" | "saving" | "deleting";
 
 const STATUS_LABELS: Record<CallStatus, string> = {
   queued: "Queued",
@@ -69,6 +87,18 @@ const TAG_CATEGORIES = [
   { key: "risks", label: "Risks" },
   { key: "outcomes", label: "Outcomes" },
 ] as const;
+
+const TAG_OVERRIDE_FIELDS: Array<{
+  field: TagOverrideField;
+  label: string;
+  kind: "text" | "list";
+}> = [
+  { field: "customer_intent", label: "Customer intent", kind: "text" },
+  { field: "call_outcome", label: "Call outcome", kind: "text" },
+  { field: "sentiment", label: "Sentiment", kind: "text" },
+  { field: "next_action", label: "Next action", kind: "text" },
+  { field: "risk_flags", label: "Risk flags", kind: "list" },
+];
 
 type TagCategory = {
   key: (typeof TAG_CATEGORIES)[number]["key"];
@@ -139,6 +169,21 @@ const toStringList = (value: unknown): string[] => {
     .filter((item): item is string => Boolean(item));
 };
 
+const formatValue = (value: unknown): string => {
+  if (Array.isArray(value)) {
+    const values = value.map((item) =>
+      typeof item === "string" ? item.trim() : JSON.stringify(item),
+    );
+    return values.filter(Boolean).join(", ") || "None";
+  }
+  if (typeof value === "string") return value.trim() || "None";
+  if (value === undefined || value === null) return "None";
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return JSON.stringify(value);
+};
+
 const normalizeSummary = (value: unknown): CallSummary | null => {
   const record = toRecord(value);
   if (!record) return null;
@@ -159,6 +204,27 @@ const normalizeSummary = (value: unknown): CallSummary | null => {
       "uploadedAt",
     ]),
     updatedAt: pickString(record, ["updated_at", "updatedAt"]),
+  };
+};
+
+const normalizeTagOverride = (value: unknown): TagOverride | null => {
+  const record = toRecord(value);
+  if (!record) return null;
+
+  const id = pickString(record, ["override_id", "overrideId", "id"]);
+  const field = pickString(record, ["field"]) as TagOverrideField | undefined;
+  if (!id || !field || !TAG_OVERRIDE_FIELDS.some((item) => item.field === field)) {
+    return null;
+  }
+
+  return {
+    id,
+    field,
+    originalValue: record.original_value ?? record.originalValue,
+    overrideValue: record.override_value ?? record.overrideValue,
+    reason: pickString(record, ["reason"]),
+    createdBy: pickString(record, ["created_by", "createdBy"]),
+    createdAt: pickString(record, ["created_at", "createdAt"]),
   };
 };
 
@@ -271,12 +337,19 @@ const extractList = (value: unknown): unknown[] => {
   const record = toRecord(value);
   if (!record) return [];
 
-  for (const key of ["calls", "items", "results", "data"]) {
+  for (const key of ["calls", "items", "results", "data", "overrides"]) {
     const nested = record[key];
     if (Array.isArray(nested)) return nested;
   }
 
   return [];
+};
+
+const extractTagOverrides = (value: unknown): TagOverride[] => {
+  const items = extractList(value);
+  return items
+    .map(normalizeTagOverride)
+    .filter((override): override is TagOverride => override !== null);
 };
 
 const buildApiUrl = (path: string) => {
@@ -358,6 +431,59 @@ const buildAnalysisView = (analysis: unknown): AnalysisView | null => {
     tags,
     raw: analysis,
   };
+};
+
+const getAnalysisRecord = (analysis: unknown) => toRecord(analysis);
+
+const getAnalysisTagRecord = (analysis: unknown) => {
+  const record = getAnalysisRecord(analysis);
+  if (!record) return null;
+  return (
+    toRecord(record.tags) ??
+    toRecord(record.tag_groups) ??
+    toRecord(record.categories) ??
+    record
+  );
+};
+
+const getGeneratedFieldValue = (
+  analysis: unknown,
+  field: TagOverrideField,
+): unknown => {
+  const record = getAnalysisRecord(analysis);
+  const tagRecord = getAnalysisTagRecord(analysis);
+
+  if (field === "customer_intent") {
+    return (
+      tagRecord?.customer_intent ??
+      tagRecord?.customer_intents ??
+      record?.customer_intent ??
+      record?.customerIntent ??
+      record?.intent
+    );
+  }
+  if (field === "call_outcome") {
+    return (
+      tagRecord?.call_outcome ??
+      tagRecord?.callOutcome ??
+      tagRecord?.outcome ??
+      tagRecord?.outcomes ??
+      record?.call_outcome ??
+      record?.callOutcome
+    );
+  }
+  if (field === "sentiment") {
+    return record?.sentiment ?? record?.customer_sentiment ?? record?.customerSentiment;
+  }
+  if (field === "next_action") {
+    return (
+      record?.next_action ??
+      record?.nextAction ??
+      record?.recommended_next_action ??
+      record?.recommendedNextAction
+    );
+  }
+  return record?.risk_flags ?? record?.riskFlags ?? tagRecord?.risks;
 };
 
 const formatEventType = (value: string) =>
@@ -463,6 +589,28 @@ const buildProcessingPanel = (call: CallSummary, detail: CallDetail | null) => {
 const shouldCollapseText = (value: string | undefined, threshold: number) =>
   Boolean(value && value.length > threshold);
 
+const shouldCollapseAudit = (events: AuditEvent[] | undefined) =>
+  Boolean(events && events.length > 3);
+
+const activeOverridesByField = (overrides: TagOverride[]) =>
+  overrides.reduce(
+    (current, override) => {
+      if (!current[override.field]) current[override.field] = override;
+      return current;
+    },
+    {} as Partial<Record<TagOverrideField, TagOverride>>,
+  );
+
+const parseOverrideValue = (value: string, kind: "text" | "list") => {
+  if (kind === "list") {
+    return value
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  return value.trim();
+};
+
 const renderTagGroups = (tags: TagCategory[]) => {
   if (tags.length === 0) {
     return <p className="empty-copy">No tags have been generated yet.</p>;
@@ -497,6 +645,16 @@ function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [isTranscriptExpanded, setIsTranscriptExpanded] = useState(false);
   const [isSummaryExpanded, setIsSummaryExpanded] = useState(false);
+  const [isAuditExpanded, setIsAuditExpanded] = useState(false);
+  const [tagOverrides, setTagOverrides] = useState<TagOverride[]>([]);
+  const [tagOverrideState, setTagOverrideState] = useState<LoadState>("idle");
+  const [tagOverrideSaveState, setTagOverrideSaveState] =
+    useState<SaveState>("idle");
+  const [tagOverrideField, setTagOverrideField] =
+    useState<TagOverrideField>("customer_intent");
+  const [tagOverrideValue, setTagOverrideValue] = useState("");
+  const [tagOverrideReason, setTagOverrideReason] = useState("");
+  const [tagOverrideCreatedBy, setTagOverrideCreatedBy] = useState("");
 
   const loadCalls = useCallback(async () => {
     setListState((current) => (current === "ready" ? current : "loading"));
@@ -552,6 +710,33 @@ function App() {
     }
   }, []);
 
+  const loadTagOverrides = useCallback(async (callId: string) => {
+    setTagOverrideState((current) =>
+      current === "ready" ? current : "loading",
+    );
+    try {
+      const response = await fetch(
+        buildApiUrl(`/calls/${encodeURIComponent(callId)}/tag-overrides`),
+      );
+      if (!response.ok) {
+        throw new Error(
+          await parseApiError(response, "Could not load tag overrides."),
+        );
+      }
+      const payload = (await response.json()) as unknown;
+      setTagOverrides(extractTagOverrides(payload));
+      setTagOverrideState("ready");
+    } catch (error) {
+      setTagOverrides([]);
+      setTagOverrideState("error");
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Could not load tag overrides.",
+      );
+    }
+  }, []);
+
   useEffect(() => {
     void loadCalls();
     const intervalId = window.setInterval(() => {
@@ -565,13 +750,17 @@ function App() {
     if (!selectedCallId) {
       setSelectedCall(null);
       setDetailState("idle");
+      setTagOverrides([]);
+      setTagOverrideState("idle");
       return;
     }
 
     setIsTranscriptExpanded(false);
     setIsSummaryExpanded(false);
+    setIsAuditExpanded(false);
     void loadCallDetail(selectedCallId);
-  }, [loadCallDetail, selectedCallId]);
+    void loadTagOverrides(selectedCallId);
+  }, [loadCallDetail, loadTagOverrides, selectedCallId]);
 
   useEffect(() => {
     if (
@@ -649,6 +838,94 @@ function App() {
     }
   };
 
+  const handleTagOverrideSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selectedCallId) return;
+
+    const fieldConfig = TAG_OVERRIDE_FIELDS.find(
+      (item) => item.field === tagOverrideField,
+    );
+    if (!fieldConfig) return;
+
+    const overrideValue = parseOverrideValue(tagOverrideValue, fieldConfig.kind);
+    if (
+      (typeof overrideValue === "string" && !overrideValue) ||
+      (Array.isArray(overrideValue) && overrideValue.length === 0)
+    ) {
+      setNotice("Enter an override value first.");
+      return;
+    }
+
+    setTagOverrideSaveState("saving");
+    try {
+      const body: Record<string, unknown> = {
+        field: tagOverrideField,
+        override_value: overrideValue,
+      };
+      if (tagOverrideReason.trim()) body.reason = tagOverrideReason.trim();
+      if (tagOverrideCreatedBy.trim()) {
+        body.created_by = tagOverrideCreatedBy.trim();
+      }
+
+      const response = await fetch(
+        buildApiUrl(`/calls/${encodeURIComponent(selectedCallId)}/tag-overrides`),
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
+      if (!response.ok) {
+        throw new Error(
+          await parseApiError(response, "Could not save tag override."),
+        );
+      }
+
+      setTagOverrideValue("");
+      setTagOverrideReason("");
+      setNotice("Tag override saved.");
+      await loadTagOverrides(selectedCallId);
+    } catch (error) {
+      setNotice(
+        error instanceof Error ? error.message : "Could not save tag override.",
+      );
+    } finally {
+      setTagOverrideSaveState("idle");
+    }
+  };
+
+  const handleDeleteTagOverride = async (override: TagOverride) => {
+    if (!selectedCallId) return;
+
+    setTagOverrideSaveState("deleting");
+    try {
+      const response = await fetch(
+        buildApiUrl(
+          `/calls/${encodeURIComponent(selectedCallId)}/tag-overrides/${encodeURIComponent(
+            override.id,
+          )}`,
+        ),
+        { method: "DELETE" },
+      );
+      if (!response.ok) {
+        throw new Error(
+          await parseApiError(response, "Could not remove tag override."),
+        );
+      }
+
+      setNotice("Tag override removed.");
+      await loadTagOverrides(selectedCallId);
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Could not remove tag override.",
+      );
+    } finally {
+      setTagOverrideSaveState("idle");
+    }
+  };
+
   const displayedCall =
     selectedCall ??
     calls.find((call) => call.id === selectedCallId) ??
@@ -663,6 +940,12 @@ function App() {
     : null;
   const transcriptCanExpand = shouldCollapseText(selectedCall?.transcript, 900);
   const summaryCanExpand = shouldCollapseText(analysisView?.summary, 280);
+  const auditCanExpand = shouldCollapseAudit(selectedCall?.events);
+  const activeTagOverrides = activeOverridesByField(tagOverrides);
+  const selectedTagFieldConfig = TAG_OVERRIDE_FIELDS.find(
+    (item) => item.field === tagOverrideField,
+  );
+  const selectedTagFieldOverride = activeTagOverrides[tagOverrideField];
 
   return (
     <main className="app-shell" data-api-base-url={config.apiBaseUrl}>
@@ -940,10 +1223,163 @@ function App() {
 
               <section className="detail-section tag-section">
                 <div className="section-heading">
-                  <h3>Tags</h3>
+                  <h3>Generated tags</h3>
                   <span>{analysisView?.tags.length ?? 0}</span>
                 </div>
                 {renderTagGroups(analysisView?.tags ?? [])}
+              </section>
+
+              <section className="detail-section override-section">
+                <div className="section-heading">
+                  <h3>Tag review</h3>
+                  <span>
+                    {tagOverrideState === "loading"
+                      ? "Loading"
+                      : `${tagOverrides.length} overrides`}
+                  </span>
+                </div>
+
+                <div className="override-table" role="table">
+                  <div className="override-table-head" role="row">
+                    <span role="columnheader">Field</span>
+                    <span role="columnheader">AI output</span>
+                    <span role="columnheader">User override</span>
+                  </div>
+                  {TAG_OVERRIDE_FIELDS.map(({ field, label }) => {
+                    const activeOverride = activeTagOverrides[field];
+                    return (
+                      <div className="override-row" role="row" key={field}>
+                        <div role="cell">
+                          <strong>{label}</strong>
+                        </div>
+                        <div role="cell">
+                          <span className="source-pill source-ai">AI</span>
+                          <p>{formatValue(getGeneratedFieldValue(selectedCall?.analysis, field))}</p>
+                        </div>
+                        <div role="cell">
+                          <span
+                            className={`source-pill ${
+                              activeOverride ? "source-user" : "source-empty"
+                            }`}
+                          >
+                            {activeOverride ? "Override" : "No override"}
+                          </span>
+                          <p>
+                            {activeOverride
+                              ? formatValue(activeOverride.overrideValue)
+                              : "Using AI output"}
+                          </p>
+                          {activeOverride?.reason ? (
+                            <small>{activeOverride.reason}</small>
+                          ) : null}
+                          {activeOverride ? (
+                            <button
+                              className="inline-link"
+                              type="button"
+                              disabled={tagOverrideSaveState !== "idle"}
+                              onClick={() => void handleDeleteTagOverride(activeOverride)}
+                            >
+                              Revert
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <form className="override-form" onSubmit={handleTagOverrideSubmit}>
+                  <div className="section-heading compact">
+                    <h4>Add or edit override</h4>
+                    <span>{selectedTagFieldOverride ? "Editing" : "New"}</span>
+                  </div>
+                  <div className="override-form-grid">
+                    <label>
+                      <span>Field</span>
+                      <select
+                        value={tagOverrideField}
+                        onChange={(event) => {
+                          const nextField = event.target.value as TagOverrideField;
+                          const nextOverride = activeTagOverrides[nextField];
+                          setTagOverrideField(nextField);
+                          setTagOverrideValue(
+                            nextOverride
+                              ? formatValue(nextOverride.overrideValue)
+                              : "",
+                          );
+                          setTagOverrideReason(nextOverride?.reason ?? "");
+                        }}
+                      >
+                        {TAG_OVERRIDE_FIELDS.map(({ field, label }) => (
+                          <option value={field} key={field}>
+                            {label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      <span>
+                        Override value
+                        {selectedTagFieldConfig?.kind === "list"
+                          ? " (comma separated)"
+                          : ""}
+                      </span>
+                      <input
+                        value={tagOverrideValue}
+                        onChange={(event) => setTagOverrideValue(event.target.value)}
+                        placeholder={
+                          selectedTagFieldOverride
+                            ? formatValue(selectedTagFieldOverride.overrideValue)
+                            : formatValue(
+                                getGeneratedFieldValue(
+                                  selectedCall?.analysis,
+                                  tagOverrideField,
+                                ),
+                              )
+                        }
+                      />
+                    </label>
+                    <label>
+                      <span>Reason</span>
+                      <input
+                        value={tagOverrideReason}
+                        onChange={(event) => setTagOverrideReason(event.target.value)}
+                        placeholder="Reviewer correction"
+                      />
+                    </label>
+                    <label>
+                      <span>Reviewer</span>
+                      <input
+                        value={tagOverrideCreatedBy}
+                        onChange={(event) =>
+                          setTagOverrideCreatedBy(event.target.value)
+                        }
+                        placeholder="ops@example.com"
+                      />
+                    </label>
+                  </div>
+                  <div className="override-actions">
+                    <button
+                      className="primary-button"
+                      type="submit"
+                      disabled={
+                        tagOverrideSaveState !== "idle" ||
+                        !analysisReady ||
+                        tagOverrideState === "loading"
+                      }
+                      data-loading={tagOverrideSaveState === "saving"}
+                    >
+                      {tagOverrideSaveState === "saving"
+                        ? "Saving"
+                        : "Save override"}
+                    </button>
+                    <p>
+                      {analysisReady
+                        ? "Overrides do not hide the model output."
+                        : "Analysis must finish before tags can be edited."}
+                    </p>
+                  </div>
+                </form>
               </section>
 
               <section className="detail-section">
@@ -985,29 +1421,46 @@ function App() {
               ) : null}
 
               <section className="detail-section audit-section">
-                <div className="section-heading">
-                  <h3>Audit trail</h3>
-                  <span>{selectedCall?.events.length ?? 0}</span>
+                <div className="section-heading text-section-heading">
+                  <div>
+                    <h3>Audit trail</h3>
+                    <span>{selectedCall?.events.length ?? 0}</span>
+                  </div>
+                  {auditCanExpand ? (
+                    <button
+                      className="text-toggle"
+                      type="button"
+                      aria-expanded={isAuditExpanded}
+                      onClick={() => setIsAuditExpanded((current) => !current)}
+                    >
+                      {isAuditExpanded ? "Show less" : "Show full"}
+                    </button>
+                  ) : null}
                 </div>
                 {selectedCall?.events.length ? (
-                  <ol className="audit-timeline" aria-label="Processing events">
-                    {selectedCall.events.map((event) => (
-                      <li className="audit-event" key={event.id}>
-                        <div className="audit-event-marker" aria-hidden="true" />
-                        <div className="audit-event-body">
-                          <div className="audit-event-head">
-                            <strong>{formatEventType(event.type)}</strong>
-                            <time dateTime={event.createdAt}>
-                              {formatDate(event.createdAt)}
-                            </time>
+                  <div
+                    className="expandable-text audit-shell"
+                    data-expanded={!auditCanExpand || isAuditExpanded}
+                  >
+                    <ol className="audit-timeline" aria-label="Processing events">
+                      {selectedCall.events.map((event) => (
+                        <li className="audit-event" key={event.id}>
+                          <div className="audit-event-marker" aria-hidden="true" />
+                          <div className="audit-event-body">
+                            <div className="audit-event-head">
+                              <strong>{formatEventType(event.type)}</strong>
+                              <time dateTime={event.createdAt}>
+                                {formatDate(event.createdAt)}
+                              </time>
+                            </div>
+                            <p>{event.message}</p>
+                            <small>{event.id}</small>
+                            {renderEventMetadata(event.metadata)}
                           </div>
-                          <p>{event.message}</p>
-                          <small>{event.id}</small>
-                          {renderEventMetadata(event.metadata)}
-                        </div>
-                      </li>
-                    ))}
-                  </ol>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
                 ) : detailState === "loading" ? (
                   <p className="empty-copy">Loading audit trail.</p>
                 ) : (
