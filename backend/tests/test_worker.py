@@ -3,9 +3,17 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from app.calls.models import CallProcessingJobRecord, CallRecord, ClaimedCallProcessingJob
+from app.calls.models import (
+    CallAnalysisCreate,
+    CallProcessingJobRecord,
+    CallRecord,
+    CallTranscriptRecord,
+    ClaimedCallProcessingJob,
+)
 from app.worker.__main__ import _build_processor, _claim_transcript_exists
+from app.worker.llm import InvalidLLMOutputError, LLMClientError, TranscriptAnalysis
 from app.worker.processor import (
+    AnalysisProcessor,
     CallProcessorError,
     FakeCallProcessor,
     NotConfiguredCallProcessor,
@@ -238,10 +246,172 @@ def test_stt_worker_does_not_reclaim_job_after_transcript_exists() -> None:
     assert first_tick is True
     assert second_tick is False
     assert len(stt_client.requests) == 1
-    assert repository.analysis_ready_jobs == [(claimed_job.job.id, claimed_job.call.id)]
-    assert repository.claims == [
-        {"worker_id": "worker-a", "transcript_exists": False},
-        {"worker_id": "worker-a", "transcript_exists": False},
+
+
+def test_analysis_worker_claims_only_jobs_with_transcript() -> None:
+    claimed_job = _claimed_job(transcript_exists=True)
+    repository = FakeWorkerRepository(
+        claimed_job=claimed_job,
+        transcript=_transcript_record(call_id=claimed_job.call.id),
+    )
+    service = WorkerService(
+        repository=repository,
+        processor=AnalysisProcessor(
+            repository=repository,
+            llm_client=FakeLLMClient(analysis=_analysis()),
+        ),
+        claim_transcript_exists=True,
+    )
+
+    did_work = service.run_once(worker_id="worker-a")
+
+    assert did_work is True
+    assert repository.claims == [{"worker_id": "worker-a", "transcript_exists": True}]
+    assert repository.completed_jobs == [(claimed_job.job.id, claimed_job.call.id)]
+
+
+def test_analysis_processor_success_persists_analysis_and_completes_job() -> None:
+    claimed_job = _claimed_job(transcript_exists=True)
+    transcript = _transcript_record(call_id=claimed_job.call.id, transcript="Customer wants pricing.")
+    analysis = _analysis(summary="Customer asked for pricing.")
+    repository = FakeWorkerRepository(claimed_job=claimed_job, transcript=transcript)
+    llm_client = FakeLLMClient(analysis=analysis)
+    service = WorkerService(
+        repository=repository,
+        processor=AnalysisProcessor(repository=repository, llm_client=llm_client),
+        claim_transcript_exists=True,
+    )
+
+    did_work = service.run_once(worker_id="worker-a")
+
+    assert did_work is True
+    assert llm_client.requests == ["Customer wants pricing."]
+    assert repository.created_analyses == [
+        CallAnalysisCreate(
+            call_id=claimed_job.call.id,
+            summary="Customer asked for pricing.",
+            tags={"customer_intent": "pricing"},
+            intent="pricing",
+            sentiment="neutral",
+            next_action="send_info",
+            risk_flags=[],
+            llm_provider="fake-llm",
+            llm_model="fake-analysis-model",
+            prompt_version="test-prompt",
+            raw_llm_output={"summary": "Customer asked for pricing."},
+        )
+    ]
+    assert repository.completed_jobs == [(claimed_job.job.id, claimed_job.call.id)]
+    assert repository.failed_jobs == []
+
+
+def test_analysis_processor_failure_preserves_transcript_and_marks_job_failed() -> None:
+    claimed_job = _claimed_job(transcript_exists=True)
+    transcript = _transcript_record(call_id=claimed_job.call.id, transcript="Keep me.")
+    repository = FakeWorkerRepository(claimed_job=claimed_job, transcript=transcript)
+    service = WorkerService(
+        repository=repository,
+        processor=AnalysisProcessor(
+            repository=repository,
+            llm_client=FakeLLMClient(error=LLMClientError("provider secret")),
+        ),
+        claim_transcript_exists=True,
+    )
+
+    did_work = service.run_once(worker_id="worker-a")
+
+    assert did_work is True
+    assert repository.transcript == transcript
+    assert repository.created_analyses == []
+    assert repository.completed_jobs == []
+    assert repository.failed_jobs == [
+        (
+            claimed_job.job.id,
+            claimed_job.call.id,
+            "analysis_failed",
+            "Transcript analysis failed",
+        )
+    ]
+
+
+def test_analysis_processor_llm_error_marks_job_failed_safely() -> None:
+    claimed_job = _claimed_job(transcript_exists=True)
+    repository = FakeWorkerRepository(
+        claimed_job=claimed_job,
+        transcript=_transcript_record(call_id=claimed_job.call.id),
+    )
+    service = WorkerService(
+        repository=repository,
+        processor=AnalysisProcessor(
+            repository=repository,
+            llm_client=FakeLLMClient(error=InvalidLLMOutputError("bad shape")),
+        ),
+        claim_transcript_exists=True,
+    )
+
+    did_work = service.run_once(worker_id="worker-a")
+
+    assert did_work is True
+    assert repository.created_analyses == []
+    assert repository.failed_jobs == [
+        (
+            claimed_job.job.id,
+            claimed_job.call.id,
+            "analysis_failed",
+            "Transcript analysis failed",
+        )
+    ]
+
+
+def test_analysis_processor_existing_analysis_does_not_duplicate() -> None:
+    claimed_job = _claimed_job(transcript_exists=True)
+    repository = FakeWorkerRepository(
+        claimed_job=claimed_job,
+        existing_analysis=True,
+        transcript=_transcript_record(call_id=claimed_job.call.id),
+    )
+    llm_client = FakeLLMClient(analysis=_analysis())
+    service = WorkerService(
+        repository=repository,
+        processor=AnalysisProcessor(repository=repository, llm_client=llm_client),
+        claim_transcript_exists=True,
+    )
+
+    did_work = service.run_once(worker_id="worker-a")
+
+    assert did_work is True
+    assert llm_client.requests == []
+    assert repository.created_analyses == []
+    assert repository.completed_jobs == [(claimed_job.job.id, claimed_job.call.id)]
+
+
+def test_analysis_processor_invalid_output_does_not_persist_partial_analysis() -> None:
+    claimed_job = _claimed_job(transcript_exists=True)
+    repository = FakeWorkerRepository(
+        claimed_job=claimed_job,
+        transcript=_transcript_record(call_id=claimed_job.call.id),
+    )
+    service = WorkerService(
+        repository=repository,
+        processor=AnalysisProcessor(
+            repository=repository,
+            llm_client=FakeLLMClient(error=InvalidLLMOutputError("missing summary")),
+        ),
+        claim_transcript_exists=True,
+    )
+
+    did_work = service.run_once(worker_id="worker-a")
+
+    assert did_work is True
+    assert repository.created_analyses == []
+    assert repository.completed_jobs == []
+    assert repository.failed_jobs == [
+        (
+            claimed_job.job.id,
+            claimed_job.call.id,
+            "analysis_failed",
+            "Transcript analysis failed",
+        )
     ]
 
 
@@ -285,6 +455,19 @@ def test_cli_builds_transcription_processor_when_required_env_is_present() -> No
     assert isinstance(processor, TranscriptionProcessor)
 
 
+def test_cli_builds_analysis_processor_when_required_env_is_present() -> None:
+    processor = _build_processor(
+        use_dev_fake=False,
+        stage="analysis",
+        repository=FakeWorkerRepository(claimed_job=None),
+        openai_api_key="fake-openai-key",
+        openai_analysis_model="gpt-test",
+        analysis_prompt_version="test-prompt",
+    )
+
+    assert isinstance(processor, AnalysisProcessor)
+
+
 def test_cli_transcription_processor_claims_only_jobs_without_transcript() -> None:
     processor = _build_processor(
         use_dev_fake=False,
@@ -299,7 +482,27 @@ def test_cli_transcription_processor_claims_only_jobs_without_transcript() -> No
     assert _claim_transcript_exists(use_dev_fake=True, processor=FakeCallProcessor()) is None
     assert (
         _claim_transcript_exists(use_dev_fake=False, processor=NotConfiguredCallProcessor())
-        is None
+        is False
+    )
+
+
+def test_cli_analysis_processor_claims_only_jobs_with_transcript() -> None:
+    processor = _build_processor(
+        use_dev_fake=False,
+        stage="analysis",
+        repository=FakeWorkerRepository(claimed_job=None),
+        openai_api_key="fake-openai-key",
+        openai_analysis_model="gpt-test",
+    )
+
+    assert _claim_transcript_exists(use_dev_fake=False, processor=processor) is True
+    assert (
+        _claim_transcript_exists(
+            use_dev_fake=False,
+            processor=NotConfiguredCallProcessor(),
+            stage="analysis",
+        )
+        is True
     )
 
 
@@ -352,20 +555,36 @@ def test_postgres_worker_repository_requeues_stt_job_for_analysis_without_comple
     assert "completed_at = null" in constants
 
 
+def test_postgres_worker_repository_persists_analysis_idempotently() -> None:
+    constants = "\n".join(
+        str(constant).lower()
+        for constant in PostgresWorkerRepository.create_analysis.__code__.co_consts
+    )
+
+    assert "insert into call_analysis" in constants
+    assert "on conflict (call_id) do nothing" in constants
+    assert "raw_llm_output" in constants
+
+
 class FakeWorkerRepository:
     def __init__(
         self,
         *,
         claimed_job: ClaimedCallProcessingJob | None,
         existing_transcript: bool = False,
+        transcript: CallTranscriptRecord | None = None,
+        existing_analysis: bool = False,
     ) -> None:
         self.claimed_job = claimed_job
-        self.existing_transcript = existing_transcript
+        self.transcript = transcript
+        self.existing_transcript = existing_transcript or transcript is not None
+        self.existing_analysis = existing_analysis
         self.claims: list[dict[str, object]] = []
         self.completed_jobs: list[tuple[UUID, UUID]] = []
         self.analysis_ready_jobs: list[tuple[UUID, UUID]] = []
         self.failed_jobs: list[tuple[UUID, UUID, str, str]] = []
         self.created_transcripts: list[dict[str, object]] = []
+        self.created_analyses: list[CallAnalysisCreate] = []
 
     def claim_next_job(
         self,
@@ -419,6 +638,21 @@ class FakeWorkerRepository:
             }
         )
         self.existing_transcript = True
+        return True
+
+    def get_transcript(self, *, call_id: UUID) -> CallTranscriptRecord | None:
+        if self.transcript and self.transcript.call_id == call_id:
+            return self.transcript
+        return None
+
+    def has_analysis(self, *, call_id: UUID) -> bool:
+        return self.existing_analysis
+
+    def create_analysis(self, *, analysis: CallAnalysisCreate) -> bool:
+        if self.existing_analysis:
+            return False
+        self.created_analyses.append(analysis)
+        self.existing_analysis = True
         return True
 
 
@@ -475,6 +709,25 @@ class FakeSTTClient:
         return self.transcription
 
 
+class FakeLLMClient:
+    def __init__(
+        self,
+        *,
+        analysis: TranscriptAnalysis | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.analysis = analysis
+        self.error = error
+        self.requests: list[str] = []
+
+    def analyze_transcript(self, *, transcript: str) -> TranscriptAnalysis:
+        self.requests.append(transcript)
+        if self.error:
+            raise self.error
+        assert self.analysis is not None
+        return self.analysis
+
+
 def _claimed_job(*, transcript_exists: bool = False) -> ClaimedCallProcessingJob:
     call = _call_record()
     job = _job_record(call_id=call.id)
@@ -517,3 +770,36 @@ def _job_record(*, call_id: UUID) -> CallProcessingJobRecord:
 
 def _dt(value: str) -> datetime:
     return datetime.fromisoformat(value).astimezone(UTC)
+
+
+def _transcript_record(
+    *,
+    call_id: UUID,
+    transcript: str = "Customer wants a demo.",
+) -> CallTranscriptRecord:
+    now = _dt("2026-07-08T12:00:00+00:00")
+    return CallTranscriptRecord(
+        id=uuid4(),
+        call_id=call_id,
+        transcript=transcript,
+        transcript_metadata={},
+        stt_provider="elevenlabs",
+        stt_model="scribe_v1",
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _analysis(*, summary: str = "Customer asked for pricing.") -> TranscriptAnalysis:
+    return TranscriptAnalysis(
+        summary=summary,
+        tags={"customer_intent": "pricing"},
+        intent="pricing",
+        sentiment="neutral",
+        next_action="send_info",
+        risk_flags=[],
+        raw_output={"summary": summary},
+        provider="fake-llm",
+        model="fake-analysis-model",
+        prompt_version="test-prompt",
+    )

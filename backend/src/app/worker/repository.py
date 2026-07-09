@@ -7,7 +7,12 @@ from psycopg import connect
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from app.calls.models import CallProcessingJobRecord, ClaimedCallProcessingJob
+from app.calls.models import (
+    CallAnalysisCreate,
+    CallProcessingJobRecord,
+    CallTranscriptRecord,
+    ClaimedCallProcessingJob,
+)
 from app.calls.repository import _call_record_from_row, _datetime, _optional_datetime, _optional_str, _uuid
 
 
@@ -48,6 +53,15 @@ class WorkerRepository(Protocol):
         stt_model: str,
         transcript_metadata: dict[str, Any],
     ) -> bool:
+        pass
+
+    def get_transcript(self, *, call_id: UUID) -> CallTranscriptRecord | None:
+        pass
+
+    def has_analysis(self, *, call_id: UUID) -> bool:
+        pass
+
+    def create_analysis(self, *, analysis: CallAnalysisCreate) -> bool:
         pass
 
 
@@ -361,6 +375,83 @@ class PostgresWorkerRepository:
         except Exception as exc:
             raise WorkerRepositoryError("Failed to create call transcript") from exc
 
+    def get_transcript(self, *, call_id: UUID) -> CallTranscriptRecord | None:
+        try:
+            with connect(self._database_url, row_factory=dict_row) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "select * from call_transcripts where call_id = %(call_id)s",
+                        {"call_id": call_id},
+                    )
+                    row = cur.fetchone()
+                    return _transcript_record_from_row(row) if row else None
+        except Exception as exc:
+            raise WorkerRepositoryError("Failed to load call transcript") from exc
+
+    def has_analysis(self, *, call_id: UUID) -> bool:
+        try:
+            with connect(self._database_url, row_factory=dict_row) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "select 1 from call_analysis where call_id = %(call_id)s",
+                        {"call_id": call_id},
+                    )
+                    return cur.fetchone() is not None
+        except Exception as exc:
+            raise WorkerRepositoryError("Failed to check call analysis") from exc
+
+    def create_analysis(self, *, analysis: CallAnalysisCreate) -> bool:
+        try:
+            with connect(self._database_url, row_factory=dict_row) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        insert into call_analysis (
+                            call_id,
+                            summary,
+                            tags,
+                            intent,
+                            sentiment,
+                            next_action,
+                            risk_flags,
+                            llm_provider,
+                            llm_model,
+                            prompt_version,
+                            raw_llm_output
+                        )
+                        values (
+                            %(call_id)s,
+                            %(summary)s,
+                            %(tags)s,
+                            %(intent)s,
+                            %(sentiment)s,
+                            %(next_action)s,
+                            %(risk_flags)s,
+                            %(llm_provider)s,
+                            %(llm_model)s,
+                            %(prompt_version)s,
+                            %(raw_llm_output)s
+                        )
+                        on conflict (call_id) do nothing
+                        """,
+                        {
+                            "call_id": analysis.call_id,
+                            "summary": analysis.summary,
+                            "tags": Jsonb(analysis.tags),
+                            "intent": analysis.intent,
+                            "sentiment": analysis.sentiment,
+                            "next_action": analysis.next_action,
+                            "risk_flags": Jsonb(analysis.risk_flags),
+                            "llm_provider": analysis.llm_provider,
+                            "llm_model": analysis.llm_model,
+                            "prompt_version": analysis.prompt_version,
+                            "raw_llm_output": Jsonb(analysis.raw_llm_output),
+                        },
+                    )
+                    return cur.rowcount == 1
+        except Exception as exc:
+            raise WorkerRepositoryError("Failed to create call analysis") from exc
+
 
 def _job_record_from_row(row: dict[str, object]) -> CallProcessingJobRecord:
     return CallProcessingJobRecord(
@@ -377,6 +468,22 @@ def _job_record_from_row(row: dict[str, object]) -> CallProcessingJobRecord:
         failed_at=_optional_datetime(row.get("failed_at")),
         last_error_code=_optional_str(row.get("last_error_code")),
         last_error_message=_optional_str(row.get("last_error_message")),
+        created_at=_datetime(row["created_at"]),
+        updated_at=_datetime(row["updated_at"]),
+    )
+
+
+def _transcript_record_from_row(row: dict[str, object]) -> CallTranscriptRecord:
+    metadata = row.get("transcript_metadata") or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    return CallTranscriptRecord(
+        id=_uuid(row["id"]),
+        call_id=_uuid(row["call_id"]),
+        transcript=str(row["transcript"]),
+        transcript_metadata=metadata,
+        stt_provider=str(row["stt_provider"]),
+        stt_model=_optional_str(row.get("stt_model")),
         created_at=_datetime(row["created_at"]),
         updated_at=_datetime(row["updated_at"]),
     )

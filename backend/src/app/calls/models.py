@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 
@@ -74,3 +75,30 @@ class ClaimedCallProcessingJob:
     job: CallProcessingJobRecord
     call: CallRecord
     transcript_exists: bool = False
+
+
+@dataclass(frozen=True)
+class CallTranscriptRecord:
+    id: UUID
+    call_id: UUID
+    transcript: str
+    transcript_metadata: dict[str, Any]
+    stt_provider: str
+    stt_model: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class CallAnalysisCreate:
+    call_id: UUID
+    summary: str
+    tags: dict[str, Any]
+    intent: str | None
+    sentiment: str | None
+    next_action: str | None
+    risk_flags: list[str]
+    llm_provider: str
+    llm_model: str
+    prompt_version: str
+    raw_llm_output: dict[str, Any]
