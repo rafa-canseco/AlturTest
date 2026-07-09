@@ -50,7 +50,7 @@ class WorkerService:
             if result.call_completed:
                 self._repository.complete_job(job_id=claimed_job.job.id, call_id=claimed_job.call.id)
             else:
-                self._repository.mark_job_pending_analysis(
+                self._repository.mark_job_ready_for_analysis(
                     job_id=claimed_job.job.id,
                     call_id=claimed_job.call.id,
                 )

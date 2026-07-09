@@ -29,7 +29,7 @@ def test_worker_claims_processes_and_completes_job() -> None:
     assert repository.claim_worker_ids == ["worker-a"]
     assert processor.processed_jobs == [claimed_job]
     assert repository.completed_jobs == [(claimed_job.job.id, claimed_job.call.id)]
-    assert repository.pending_analysis_jobs == []
+    assert repository.analysis_ready_jobs == []
     assert repository.failed_jobs == []
 
 
@@ -43,7 +43,7 @@ def test_worker_returns_false_when_no_job_is_available() -> None:
     assert did_work is False
     assert processor.processed_jobs == []
     assert repository.completed_jobs == []
-    assert repository.pending_analysis_jobs == []
+    assert repository.analysis_ready_jobs == []
     assert repository.failed_jobs == []
 
 
@@ -128,7 +128,7 @@ def test_transcription_processor_success_persists_transcript_and_keeps_call_proc
         }
     ]
     assert repository.completed_jobs == []
-    assert repository.pending_analysis_jobs == [(claimed_job.job.id, claimed_job.call.id)]
+    assert repository.analysis_ready_jobs == [(claimed_job.job.id, claimed_job.call.id)]
     assert repository.failed_jobs == []
 
 
@@ -150,7 +150,8 @@ def test_transcription_processor_failure_marks_job_failed_safely() -> None:
 
     assert did_work is True
     assert repository.created_transcripts == []
-    assert repository.pending_analysis_jobs == []
+    assert repository.completed_jobs == []
+    assert repository.analysis_ready_jobs == []
     assert repository.failed_jobs == [
         (
             claimed_job.job.id,
@@ -162,7 +163,7 @@ def test_transcription_processor_failure_marks_job_failed_safely() -> None:
 
 
 def test_transcription_processor_existing_transcript_does_not_duplicate() -> None:
-    claimed_job = _claimed_job()
+    claimed_job = _claimed_job(transcript_exists=True)
     repository = FakeWorkerRepository(claimed_job=claimed_job, existing_transcript=True)
     storage = FakeCallStorage(audio=b"fake-audio")
     stt_client = FakeSTTClient(
@@ -188,7 +189,8 @@ def test_transcription_processor_existing_transcript_does_not_duplicate() -> Non
     assert storage.downloads == []
     assert stt_client.requests == []
     assert repository.created_transcripts == []
-    assert repository.pending_analysis_jobs == [(claimed_job.job.id, claimed_job.call.id)]
+    assert repository.completed_jobs == []
+    assert repository.analysis_ready_jobs == [(claimed_job.job.id, claimed_job.call.id)]
     assert repository.failed_jobs == []
 
 
@@ -241,6 +243,8 @@ def test_postgres_worker_repository_uses_skip_locked_claim_and_clears_retry_fiel
 
     assert "connect" in names
     assert "for update of j skip locked" in constants
+    assert "call_transcripts" in constants
+    assert "transcript_exists" in constants
     assert "failed_at = null" in constants
     assert "last_error_code = null" in constants
     assert "last_error_message = null" in constants
@@ -264,17 +268,18 @@ def test_postgres_worker_repository_requeue_clears_failure_fields() -> None:
     assert "attempt_count < max_attempts" in constants
 
 
-def test_postgres_worker_repository_marks_stt_job_completed_without_completing_call() -> None:
+def test_postgres_worker_repository_requeues_stt_job_for_analysis_without_completing_call() -> None:
     constants = "\n".join(
         str(constant).lower()
-        for constant in PostgresWorkerRepository.mark_job_pending_analysis.__code__.co_consts
+        for constant in PostgresWorkerRepository.mark_job_ready_for_analysis.__code__.co_consts
     )
 
     assert "update calls" in constants
     assert "status = 'processing'" in constants
     assert "update call_processing_jobs" in constants
-    assert "status = 'completed'" in constants
-    assert "completed_at = now()" in constants
+    assert "status = 'queued'" in constants
+    assert "available_at = now()" in constants
+    assert "completed_at = null" in constants
 
 
 class FakeWorkerRepository:
@@ -288,7 +293,7 @@ class FakeWorkerRepository:
         self.existing_transcript = existing_transcript
         self.claim_worker_ids: list[str] = []
         self.completed_jobs: list[tuple[UUID, UUID]] = []
-        self.pending_analysis_jobs: list[tuple[UUID, UUID]] = []
+        self.analysis_ready_jobs: list[tuple[UUID, UUID]] = []
         self.failed_jobs: list[tuple[UUID, UUID, str, str]] = []
         self.created_transcripts: list[dict[str, object]] = []
 
@@ -299,8 +304,8 @@ class FakeWorkerRepository:
     def complete_job(self, *, job_id: UUID, call_id: UUID) -> None:
         self.completed_jobs.append((job_id, call_id))
 
-    def mark_job_pending_analysis(self, *, job_id: UUID, call_id: UUID) -> None:
-        self.pending_analysis_jobs.append((job_id, call_id))
+    def mark_job_ready_for_analysis(self, *, job_id: UUID, call_id: UUID) -> None:
+        self.analysis_ready_jobs.append((job_id, call_id))
 
     def fail_job(self, *, job_id: UUID, call_id: UUID, error_code: str, error_message: str) -> None:
         self.failed_jobs.append((job_id, call_id, error_code, error_message))
@@ -386,10 +391,10 @@ class FakeSTTClient:
         return self.transcription
 
 
-def _claimed_job() -> ClaimedCallProcessingJob:
+def _claimed_job(*, transcript_exists: bool = False) -> ClaimedCallProcessingJob:
     call = _call_record()
     job = _job_record(call_id=call.id)
-    return ClaimedCallProcessingJob(job=job, call=call)
+    return ClaimedCallProcessingJob(job=job, call=call, transcript_exists=transcript_exists)
 
 
 def _call_record() -> CallRecord:

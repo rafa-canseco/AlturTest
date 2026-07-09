@@ -73,3 +73,4 @@ class CallProcessingJobRecord:
 class ClaimedCallProcessingJob:
     job: CallProcessingJobRecord
     call: CallRecord
+    transcript_exists: bool = False

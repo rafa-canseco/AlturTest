@@ -64,8 +64,10 @@ uv run python -m app.worker --once --dev-fake-processor
 
 With ElevenLabs configured, the worker downloads private audio from Supabase
 Storage, sends it to ElevenLabs Speech to Text, stores one transcript in
-`call_transcripts`, and leaves the call in `processing` for the later LLM
-analysis step. OpenAI/LLM analysis and `call_analysis` writes are intentionally
+`call_transcripts`, leaves the call in `processing`, and requeues the job for
+the later LLM analysis step. ALT-11 should branch on the existing transcript and
+run analysis instead of STT; claimed jobs include a `transcript_exists` flag for
+that handoff. OpenAI/LLM analysis and `call_analysis` writes are intentionally
 not implemented yet.
 
 ## Supabase Contract

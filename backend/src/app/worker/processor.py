@@ -55,7 +55,7 @@ class TranscriptionProcessor:
 
     def process(self, claimed_job: ClaimedCallProcessingJob) -> ProcessingResult:
         call = claimed_job.call
-        if self._repository.has_transcript(call_id=call.id):
+        if claimed_job.transcript_exists or self._repository.has_transcript(call_id=call.id):
             return ProcessingResult(
                 message="Transcript already exists; pending analysis",
                 call_completed=False,

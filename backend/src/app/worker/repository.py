@@ -22,7 +22,7 @@ class WorkerRepository(Protocol):
     def complete_job(self, *, job_id: UUID, call_id: UUID) -> None:
         pass
 
-    def mark_job_pending_analysis(self, *, job_id: UUID, call_id: UUID) -> None:
+    def mark_job_ready_for_analysis(self, *, job_id: UUID, call_id: UUID) -> None:
         pass
 
     def fail_job(self, *, job_id: UUID, call_id: UUID, error_code: str, error_message: str) -> None:
@@ -57,7 +57,13 @@ class PostgresWorkerRepository:
                     with conn.cursor() as cur:
                         cur.execute(
                             """
-                            select j.*
+                            select
+                                j.*,
+                                exists (
+                                    select 1
+                                    from call_transcripts t
+                                    where t.call_id = j.call_id
+                                ) as transcript_exists
                             from call_processing_jobs j
                             join calls c on c.id = j.call_id
                             where j.status = 'queued'
@@ -72,6 +78,7 @@ class PostgresWorkerRepository:
                         job_row = cur.fetchone()
                         if job_row is None:
                             return None
+                        transcript_exists = bool(job_row["transcript_exists"])
 
                         cur.execute(
                             """
@@ -118,6 +125,7 @@ class PostgresWorkerRepository:
                         return ClaimedCallProcessingJob(
                             job=_job_record_from_row(claimed_job_row),
                             call=_call_record_from_row(call_row),
+                            transcript_exists=transcript_exists,
                         )
         except Exception as exc:
             raise WorkerRepositoryError("Failed to claim queued call processing job") from exc
@@ -156,7 +164,7 @@ class PostgresWorkerRepository:
         except Exception as exc:
             raise WorkerRepositoryError("Failed to complete call processing job") from exc
 
-    def mark_job_pending_analysis(self, *, job_id: UUID, call_id: UUID) -> None:
+    def mark_job_ready_for_analysis(self, *, job_id: UUID, call_id: UUID) -> None:
         try:
             with connect(self._database_url, row_factory=dict_row) as conn:
                 with conn.transaction():
@@ -176,10 +184,11 @@ class PostgresWorkerRepository:
                         cur.execute(
                             """
                             update call_processing_jobs
-                            set status = 'completed',
+                            set status = 'queued',
+                                available_at = now(),
                                 locked_at = null,
                                 locked_by = null,
-                                completed_at = now(),
+                                completed_at = null,
                                 failed_at = null,
                                 last_error_code = null,
                                 last_error_message = null
@@ -190,7 +199,7 @@ class PostgresWorkerRepository:
                             {"job_id": job_id, "call_id": call_id},
                         )
         except Exception as exc:
-            raise WorkerRepositoryError("Failed to mark call processing job pending analysis") from exc
+            raise WorkerRepositoryError("Failed to mark call processing job ready for analysis") from exc
 
     def fail_job(self, *, job_id: UUID, call_id: UUID, error_code: str, error_message: str) -> None:
         try:
