@@ -62,6 +62,8 @@ Worker stage: analysis
 The upload endpoint returns after the audio is stored and a job is queued. STT and LLM calls can take minutes, so they run in workers.
 
 More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Interview-focused scale and production answers:
+[docs/INTERVIEW_ANSWERS.md](docs/INTERVIEW_ANSWERS.md).
 
 ## Requirements
 
