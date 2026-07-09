@@ -46,6 +46,29 @@ const STATUS_ORDER: CallStatus[] = [
   "failed",
 ];
 
+const TAG_CATEGORIES = [
+  { key: "topics", label: "Topics" },
+  { key: "customer_intents", label: "Customer intents" },
+  { key: "products", label: "Products" },
+  { key: "risks", label: "Risks" },
+  { key: "outcomes", label: "Outcomes" },
+] as const;
+
+type TagCategory = {
+  key: (typeof TAG_CATEGORIES)[number]["key"];
+  label: string;
+  values: string[];
+};
+
+type AnalysisView = {
+  summary?: string;
+  intent?: string;
+  sentiment?: string;
+  nextAction?: string;
+  tags: TagCategory[];
+  raw?: unknown;
+};
+
 const toRecord = (value: unknown): ApiRecord | null =>
   value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as ApiRecord)
@@ -73,6 +96,19 @@ const pickString = (
     if (value) return value;
   }
   return fallback;
+};
+
+const toStringList = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item) => {
+      if (typeof item === "string") return item.trim();
+      const record = toRecord(item);
+      if (!record) return undefined;
+      return pickString(record, ["label", "name", "value", "text"]);
+    })
+    .filter((item): item is string => Boolean(item));
 };
 
 const normalizeSummary = (value: unknown): CallSummary | null => {
@@ -188,20 +224,57 @@ const formatDate = (value?: string) => {
   }).format(date);
 };
 
-const renderAnalysis = (analysis: unknown) => {
-  if (analysis === undefined || analysis === null || analysis === "") {
-    return <p className="empty-copy">No analysis yet.</p>;
-  }
-
+const buildAnalysisView = (analysis: unknown): AnalysisView | null => {
   if (typeof analysis === "string") {
-    return <p className="analysis-copy">{analysis}</p>;
+    return analysis.trim() ? { summary: analysis.trim(), tags: [] } : null;
   }
 
-  return (
-    <pre className="analysis-json">
-      {JSON.stringify(analysis, null, 2)}
-    </pre>
-  );
+  const record = toRecord(analysis);
+  if (!record) return null;
+
+  const tagRecord =
+    toRecord(record.tags) ??
+    toRecord(record.tag_groups) ??
+    toRecord(record.categories) ??
+    record;
+
+  const tags = TAG_CATEGORIES.map(({ key, label }) => ({
+    key,
+    label,
+    values: toStringList(tagRecord[key]),
+  })).filter((category) => category.values.length > 0);
+
+  return {
+    summary: pickString(record, [
+      "summary",
+      "call_summary",
+      "callSummary",
+      "overview",
+      "abstract",
+    ]),
+    intent: pickString(record, [
+      "intent",
+      "primary_intent",
+      "primaryIntent",
+      "customer_intent",
+      "customerIntent",
+    ]),
+    sentiment: pickString(record, [
+      "sentiment",
+      "customer_sentiment",
+      "customerSentiment",
+    ]),
+    nextAction: pickString(record, [
+      "next_action",
+      "nextAction",
+      "recommended_next_action",
+      "recommendedNextAction",
+      "follow_up",
+      "followUp",
+    ]),
+    tags,
+    raw: analysis,
+  };
 };
 
 const formatEventType = (value: string) =>
@@ -227,6 +300,38 @@ const renderEventMetadata = (metadata: unknown) => {
         ? metadata
         : JSON.stringify(metadata, null, 2)}
     </pre>
+  );
+};
+
+const hasAnalysisContent = (analysis: AnalysisView | null) =>
+  Boolean(
+    analysis?.summary ??
+      analysis?.intent ??
+      analysis?.sentiment ??
+      analysis?.nextAction ??
+      analysis?.tags.length,
+  );
+
+const renderTagGroups = (tags: TagCategory[]) => {
+  if (tags.length === 0) {
+    return <p className="empty-copy">No tags have been generated yet.</p>;
+  }
+
+  return (
+    <div className="tag-groups">
+      {tags.map((category) => (
+        <div className="tag-group" key={category.key}>
+          <span>{category.label}</span>
+          <div className="tag-chip-list">
+            {category.values.map((value) => (
+              <em className={`tag-chip tag-${category.key}`} key={value}>
+                {value}
+              </em>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
   );
 };
 
@@ -393,6 +498,11 @@ function App() {
     selectedCall ??
     calls.find((call) => call.id === selectedCallId) ??
     null;
+  const analysisView = buildAnalysisView(selectedCall?.analysis);
+  const analysisReady = hasAnalysisContent(analysisView);
+  const transcriptReady = Boolean(selectedCall?.transcript);
+  const analysisFailed =
+    displayedCall?.status === "failed" && transcriptReady && !analysisReady;
 
   return (
     <main className="app-shell" data-api-base-url={config.apiBaseUrl}>
@@ -546,11 +656,95 @@ function App() {
 
               {displayedCall.status === "failed" ? (
                 <section className="failure-panel">
-                  <h3>Processing failed</h3>
+                  <h3>
+                    {transcriptReady ? "Analysis failed" : "Processing failed"}
+                  </h3>
                   <p>
                     {selectedCall?.errorMessage ??
-                      "The backend could not process this file."}
+                      (transcriptReady
+                        ? "The transcript is available, but analysis could not be completed for this call."
+                        : "The backend could not process this file.")}
                   </p>
+                </section>
+              ) : null}
+
+              <section className="detail-section">
+                <div className="section-heading">
+                  <h3>Transcript</h3>
+                  <span>{transcriptReady ? "Ready" : "Pending"}</span>
+                </div>
+                {selectedCall?.transcript ? (
+                  <p className="transcript-copy">{selectedCall.transcript}</p>
+                ) : (
+                  <p className="empty-copy">
+                    {displayedCall.status === "queued"
+                      ? "Transcript will appear after this call leaves the queue."
+                      : displayedCall.status === "processing"
+                        ? "Transcript is being prepared."
+                        : "No transcript is available for this call."}
+                  </p>
+                )}
+              </section>
+
+              <section className="detail-section">
+                <div className="section-heading">
+                  <h3>Summary</h3>
+                  <span>{analysisView?.summary ? "Ready" : "Pending"}</span>
+                </div>
+                {analysisView?.summary ? (
+                  <p className="summary-copy">{analysisView.summary}</p>
+                ) : (
+                  <p className="empty-copy">
+                    {analysisFailed
+                      ? "Summary was not generated for this call."
+                      : "Summary will appear after analysis completes."}
+                  </p>
+                )}
+              </section>
+
+              <section className="detail-section tag-section">
+                <div className="section-heading">
+                  <h3>Tags</h3>
+                  <span>{analysisView?.tags.length ?? 0}</span>
+                </div>
+                {renderTagGroups(analysisView?.tags ?? [])}
+              </section>
+
+              <section className="detail-section">
+                <div className="section-heading">
+                  <h3>Intent, sentiment, next action</h3>
+                  <span>{analysisReady ? "Ready" : "Pending"}</span>
+                </div>
+                <dl className="ops-grid">
+                  <div>
+                    <dt>Intent</dt>
+                    <dd>{analysisView?.intent ?? "Not available"}</dd>
+                  </div>
+                  <div>
+                    <dt>Sentiment</dt>
+                    <dd>{analysisView?.sentiment ?? "Not available"}</dd>
+                  </div>
+                  <div>
+                    <dt>Next action</dt>
+                    <dd>{analysisView?.nextAction ?? "Not available"}</dd>
+                  </div>
+                </dl>
+              </section>
+
+              {analysisView?.raw &&
+              !analysisView.summary &&
+              analysisView.tags.length === 0 &&
+              !analysisView.intent &&
+              !analysisView.sentiment &&
+              !analysisView.nextAction ? (
+                <section className="detail-section">
+                  <div className="section-heading">
+                    <h3>Analysis payload</h3>
+                    <span>Raw</span>
+                  </div>
+                  <pre className="analysis-json">
+                    {JSON.stringify(analysisView.raw, null, 2)}
+                  </pre>
                 </section>
               ) : null}
 
@@ -583,34 +777,6 @@ function App() {
                 ) : (
                   <p className="empty-copy">No processing events yet.</p>
                 )}
-              </section>
-
-              <section className="detail-section">
-                <div className="section-heading">
-                  <h3>Transcript</h3>
-                  <span>
-                    {selectedCall?.transcript ? "Ready" : "Pending"}
-                  </span>
-                </div>
-                {selectedCall?.transcript ? (
-                  <p className="transcript-copy">{selectedCall.transcript}</p>
-                ) : (
-                  <p className="empty-copy">No transcript yet.</p>
-                )}
-              </section>
-
-              <section className="detail-section">
-                <div className="section-heading">
-                  <h3>Analysis</h3>
-                  <span>
-                    {selectedCall?.analysis
-                      ? "Ready"
-                      : displayedCall.status === "failed"
-                        ? "Failed"
-                        : "Pending"}
-                  </span>
-                </div>
-                {renderAnalysis(selectedCall?.analysis)}
               </section>
             </>
           )}
