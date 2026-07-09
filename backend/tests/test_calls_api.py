@@ -239,14 +239,14 @@ def test_get_call_returns_processing_events_in_order() -> None:
     call = _record(original_filename="sales.mp3", status="processing")
     first = _event_record(
         call_id=call.id,
-        event_type="call_uploaded",
+        event_type="call.uploaded",
         message="Call audio uploaded",
         metadata={"content_type": "audio/mpeg", "file_size_bytes": 11},
         created_at=_dt("2026-07-08T12:00:00+00:00"),
     )
     second = _event_record(
         call_id=call.id,
-        event_type="job_claimed",
+        event_type="job.claimed",
         message="Call processing job claimed",
         metadata={"stage": "transcription", "attempt_count": 1, "max_attempts": 3},
         created_at=_dt("2026-07-08T12:01:00+00:00"),
@@ -264,14 +264,14 @@ def test_get_call_returns_processing_events_in_order() -> None:
     assert body["events"] == [
         {
             "event_id": str(first.id),
-            "event_type": "call_uploaded",
+            "event_type": "call.uploaded",
             "message": "Call audio uploaded",
             "metadata": {"content_type": "audio/mpeg", "file_size_bytes": 11},
             "created_at": "2026-07-08T12:00:00Z",
         },
         {
             "event_id": str(second.id),
-            "event_type": "job_claimed",
+            "event_type": "job.claimed",
             "message": "Call processing job claimed",
             "metadata": {"stage": "transcription", "attempt_count": 1, "max_attempts": 3},
             "created_at": "2026-07-08T12:01:00Z",
@@ -331,8 +331,8 @@ def test_postgres_call_repository_creates_upload_and_queue_events() -> None:
     )
 
     assert "insert into processing_events" in constants
-    assert "call_uploaded" in constants
-    assert "job_queued" in constants
+    assert "call.uploaded" in constants
+    assert "job.queued" in constants
     assert "stage', 'transcription'" in constants
 
 

@@ -167,7 +167,7 @@ class PostgresWorkerRepository:
                             values (
                                 %(call_id)s,
                                 %(job_id)s,
-                                'job_claimed',
+                                'job.claimed',
                                 'Call processing job claimed',
                                 %(metadata)s
                             )
@@ -240,7 +240,7 @@ class PostgresWorkerRepository:
                             values (
                                 %(call_id)s,
                                 %(job_id)s,
-                                'call_completed',
+                                'call.completed',
                                 'Call processing completed',
                                 '{}'::jsonb
                             )
@@ -296,7 +296,7 @@ class PostgresWorkerRepository:
                             values (
                                 %(call_id)s,
                                 %(job_id)s,
-                                'job_queued',
+                                'job.queued',
                                 'Call processing job queued',
                                 jsonb_build_object('stage', 'analysis')
                             )
@@ -384,7 +384,7 @@ class PostgresWorkerRepository:
                             values (
                                 %(call_id)s,
                                 %(job_id)s,
-                                'call_failed',
+                                'call.failed',
                                 'Call processing failed',
                                 %(metadata)s
                             )
@@ -512,7 +512,7 @@ class PostgresWorkerRepository:
                                 )
                                 values (
                                     %(call_id)s,
-                                    'stt_succeeded',
+                                    'stt.succeeded',
                                     'Speech transcription completed',
                                     %(metadata)s
                                 )
@@ -609,7 +609,7 @@ class PostgresWorkerRepository:
                                 )
                                 values (
                                     %(call_id)s,
-                                    'analysis_succeeded',
+                                    'analysis.succeeded',
                                     'Transcript analysis completed',
                                     %(metadata)s
                                 )
@@ -672,13 +672,13 @@ def _stage_from_transcript_exists(transcript_exists: bool) -> str:
 
 def _failure_event_type(error_code: str) -> str | None:
     if error_code in {"audio_download_failed", "stt_failed"}:
-        return "stt_failed"
+        return "stt.failed"
     if error_code == "analysis_failed":
-        return "analysis_failed"
+        return "analysis.failed"
     return None
 
 
 def _failure_event_message(event_type: str) -> str:
-    if event_type == "stt_failed":
+    if event_type == "stt.failed":
         return "Speech transcription failed"
     return "Transcript analysis failed"

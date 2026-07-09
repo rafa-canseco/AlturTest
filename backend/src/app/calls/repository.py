@@ -108,7 +108,7 @@ class PostgresCallRepository:
                             )
                             values (
                                 %(call_id)s,
-                                'call_uploaded',
+                                'call.uploaded',
                                 'Call audio uploaded',
                                 jsonb_build_object(
                                     'content_type', %(content_type)s,
@@ -134,7 +134,7 @@ class PostgresCallRepository:
                             values (
                                 %(call_id)s,
                                 %(job_id)s,
-                                'job_queued',
+                                'job.queued',
                                 'Call processing job queued',
                                 jsonb_build_object('stage', 'transcription')
                             )
