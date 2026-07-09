@@ -127,6 +127,7 @@ class ProcessingEventRecord:
 @dataclass(frozen=True)
 class CallDetailRecord:
     call: CallRecord
+    job: CallProcessingJobRecord | None = None
     transcript: CallTranscriptRecord | None = None
     analysis: CallAnalysisRecord | None = None
     events: list[ProcessingEventRecord] = field(default_factory=list)

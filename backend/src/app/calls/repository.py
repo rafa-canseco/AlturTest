@@ -13,6 +13,7 @@ from app.calls.models import (
     CallCreate,
     CallDetailRecord,
     CallIdempotencyRecord,
+    CallProcessingJobRecord,
     CallRecord,
     CallTranscriptRecord,
     ProcessingEventRecord,
@@ -265,6 +266,12 @@ class PostgresCallRepository:
                         return None
 
                     cur.execute(
+                        "select * from call_processing_jobs where call_id = %(call_id)s",
+                        {"call_id": call_id},
+                    )
+                    job_row = cur.fetchone()
+
+                    cur.execute(
                         "select * from call_transcripts where call_id = %(call_id)s",
                         {"call_id": call_id},
                     )
@@ -303,6 +310,7 @@ class PostgresCallRepository:
 
                     return CallDetailRecord(
                         call=_call_record_from_row(call_row),
+                        job=_job_record_from_row(job_row) if job_row else None,
                         transcript=(
                             _transcript_record_from_row(transcript_row)
                             if transcript_row
@@ -334,6 +342,26 @@ def _call_record_from_row(row: dict[str, object]) -> CallRecord:
         error_code=_optional_str(row.get("error_code")),
         error_message=_optional_str(row.get("error_message")),
         failed_at=_optional_datetime(row.get("failed_at")),
+    )
+
+
+def _job_record_from_row(row: dict[str, object]) -> CallProcessingJobRecord:
+    return CallProcessingJobRecord(
+        id=_uuid(row["id"]),
+        call_id=_uuid(row["call_id"]),
+        status=str(row["status"]),
+        attempt_count=int(row["attempt_count"]),
+        max_attempts=int(row["max_attempts"]),
+        available_at=_datetime(row["available_at"]),
+        locked_at=_optional_datetime(row.get("locked_at")),
+        locked_by=_optional_str(row.get("locked_by")),
+        started_at=_optional_datetime(row.get("started_at")),
+        completed_at=_optional_datetime(row.get("completed_at")),
+        failed_at=_optional_datetime(row.get("failed_at")),
+        last_error_code=_optional_str(row.get("last_error_code")),
+        last_error_message=_optional_str(row.get("last_error_message")),
+        created_at=_datetime(row["created_at"]),
+        updated_at=_datetime(row["updated_at"]),
     )
 
 

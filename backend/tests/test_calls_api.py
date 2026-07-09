@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from hashlib import sha256
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
@@ -10,6 +11,7 @@ from app.calls.models import (
     CallCreate,
     CallDetailRecord,
     CallIdempotencyRecord,
+    CallProcessingJobRecord,
     CallRecord,
     CallTranscriptRecord,
     ProcessingEventRecord,
@@ -367,6 +369,65 @@ def test_get_call_returns_call_detail_without_results() -> None:
     assert body["updated_at"] is not None
     assert body["transcript"] is None
     assert body["analysis"] is None
+    assert body["processing_job"] is None
+
+
+def test_get_call_returns_queued_unclaimed_processing_job_diagnostics() -> None:
+    call = _record(original_filename="sales.mp3", status="queued")
+    job = _job_record(call_id=call.id, status="queued")
+    repository = FakeCallRepository(
+        records=[call],
+        details={call.id: CallDetailRecord(call=call, job=job)},
+    )
+    client = _client(repository=repository, storage=FakeCallStorage())
+
+    response = client.get(f"/calls/{call.id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["transcript"] is None
+    assert body["processing_job"] == {
+        "status": "queued",
+        "stage": "transcription",
+        "attempt_count": 0,
+        "max_attempts": 3,
+        "available_at": "2026-07-08T12:00:00Z",
+        "locked_at": None,
+        "locked_by": None,
+        "started_at": None,
+        "completed_at": None,
+        "failed_at": None,
+        "last_error_code": None,
+        "last_error_message": None,
+    }
+
+
+def test_get_call_returns_claimed_processing_job_diagnostics() -> None:
+    call = _record(original_filename="sales.mp3", status="processing")
+    job = _job_record(
+        call_id=call.id,
+        status="processing",
+        attempt_count=1,
+        locked_at=_dt("2026-07-08T12:01:00+00:00"),
+        locked_by="worker-1",
+        started_at=_dt("2026-07-08T12:01:00+00:00"),
+    )
+    repository = FakeCallRepository(
+        records=[call],
+        details={call.id: CallDetailRecord(call=call, job=job)},
+    )
+    client = _client(repository=repository, storage=FakeCallStorage())
+
+    response = client.get(f"/calls/{call.id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["processing_job"]["status"] == "processing"
+    assert body["processing_job"]["stage"] == "transcription"
+    assert body["processing_job"]["attempt_count"] == 1
+    assert body["processing_job"]["locked_at"] == "2026-07-08T12:01:00Z"
+    assert body["processing_job"]["locked_by"] == _safe_worker_alias("worker-1")
+    assert body["processing_job"]["started_at"] == "2026-07-08T12:01:00Z"
 
 
 def test_get_call_returns_detail_with_transcript_without_analysis() -> None:
@@ -376,9 +437,10 @@ def test_get_call_returns_detail_with_transcript_without_analysis() -> None:
         transcript="Customer wants pricing.",
         metadata={"language_code": "en"},
     )
+    job = _job_record(call_id=call.id, status="queued", attempt_count=1)
     repository = FakeCallRepository(
         records=[call],
-        details={call.id: CallDetailRecord(call=call, transcript=transcript)},
+        details={call.id: CallDetailRecord(call=call, job=job, transcript=transcript)},
     )
     client = _client(repository=repository, storage=FakeCallStorage())
 
@@ -397,15 +459,29 @@ def test_get_call_returns_detail_with_transcript_without_analysis() -> None:
         "updated_at": "2026-07-08T12:00:00Z",
     }
     assert body["analysis"] is None
+    assert body["processing_job"]["stage"] == "analysis"
 
 
 def test_get_call_returns_detail_with_transcript_and_analysis() -> None:
     call = _record(original_filename="sales.mp3", status="completed")
     transcript = _transcript_record(call_id=call.id)
     analysis = _analysis_record(call_id=call.id)
+    job = _job_record(
+        call_id=call.id,
+        status="completed",
+        attempt_count=2,
+        completed_at=_dt("2026-07-08T12:03:00+00:00"),
+    )
     repository = FakeCallRepository(
         records=[call],
-        details={call.id: CallDetailRecord(call=call, transcript=transcript, analysis=analysis)},
+        details={
+            call.id: CallDetailRecord(
+                call=call,
+                job=job,
+                transcript=transcript,
+                analysis=analysis,
+            )
+        },
     )
     client = _client(repository=repository, storage=FakeCallStorage())
 
@@ -429,6 +505,33 @@ def test_get_call_returns_detail_with_transcript_and_analysis() -> None:
         "created_at": "2026-07-08T12:00:00Z",
         "updated_at": "2026-07-08T12:00:00Z",
     }
+    assert body["processing_job"]["status"] == "completed"
+    assert body["processing_job"]["stage"] == "completed"
+    assert body["processing_job"]["completed_at"] == "2026-07-08T12:03:00Z"
+
+
+def test_get_call_processing_job_stage_prefers_completed_over_failed() -> None:
+    call = _record(original_filename="sales.mp3", status="completed")
+    transcript = _transcript_record(call_id=call.id)
+    job = _job_record(
+        call_id=call.id,
+        status="failed",
+        attempt_count=3,
+        failed_at=_dt("2026-07-08T12:05:00+00:00"),
+        last_error_code="analysis_failed",
+        last_error_message="Transcript analysis failed",
+    )
+    repository = FakeCallRepository(
+        records=[call],
+        details={call.id: CallDetailRecord(call=call, job=job, transcript=transcript)},
+    )
+    client = _client(repository=repository, storage=FakeCallStorage())
+
+    response = client.get(f"/calls/{call.id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["processing_job"]["stage"] == "completed"
 
 
 def test_get_call_returns_processing_events_in_order() -> None:
@@ -485,9 +588,17 @@ def test_get_call_returns_failed_detail_with_partial_transcript() -> None:
         failed_at=_dt("2026-07-08T12:05:00+00:00"),
     )
     transcript = _transcript_record(call_id=call.id)
+    job = _job_record(
+        call_id=call.id,
+        status="failed",
+        attempt_count=3,
+        failed_at=_dt("2026-07-08T12:05:00+00:00"),
+        last_error_code="analysis_failed",
+        last_error_message="Transcript analysis failed",
+    )
     repository = FakeCallRepository(
         records=[call],
-        details={call.id: CallDetailRecord(call=call, transcript=transcript)},
+        details={call.id: CallDetailRecord(call=call, job=job, transcript=transcript)},
     )
     client = _client(repository=repository, storage=FakeCallStorage())
 
@@ -499,6 +610,10 @@ def test_get_call_returns_failed_detail_with_partial_transcript() -> None:
     assert body["error_code"] == "analysis_failed"
     assert body["transcript"]["text"] == "Customer wants a demo."
     assert body["analysis"] is None
+    assert body["processing_job"]["stage"] == "failed"
+    assert body["processing_job"]["failed_at"] == "2026-07-08T12:05:00Z"
+    assert body["processing_job"]["last_error_code"] == "analysis_failed"
+    assert body["processing_job"]["last_error_message"] == "Transcript analysis failed"
 
 
 def test_get_call_returns_404_when_missing() -> None:
@@ -749,6 +864,41 @@ def _transcript_record(
     )
 
 
+def _job_record(
+    *,
+    call_id: UUID,
+    status: str = "queued",
+    attempt_count: int = 0,
+    max_attempts: int = 3,
+    available_at: datetime | None = None,
+    locked_at: datetime | None = None,
+    locked_by: str | None = None,
+    started_at: datetime | None = None,
+    completed_at: datetime | None = None,
+    failed_at: datetime | None = None,
+    last_error_code: str | None = None,
+    last_error_message: str | None = None,
+) -> CallProcessingJobRecord:
+    now = _dt("2026-07-08T12:00:00+00:00")
+    return CallProcessingJobRecord(
+        id=uuid4(),
+        call_id=call_id,
+        status=status,
+        attempt_count=attempt_count,
+        max_attempts=max_attempts,
+        available_at=available_at or now,
+        locked_at=locked_at,
+        locked_by=locked_by,
+        started_at=started_at,
+        completed_at=completed_at,
+        failed_at=failed_at,
+        last_error_code=last_error_code,
+        last_error_message=last_error_message,
+        created_at=now,
+        updated_at=now,
+    )
+
+
 def _analysis_record(*, call_id: UUID) -> CallAnalysisRecord:
     now = _dt("2026-07-08T12:00:00+00:00")
     return CallAnalysisRecord(
@@ -790,3 +940,7 @@ def _event_record(
 
 def _dt(value: str) -> datetime:
     return datetime.fromisoformat(value).astimezone(UTC)
+
+
+def _safe_worker_alias(value: str) -> str:
+    return f"worker-{sha256(value.encode('utf-8')).hexdigest()[:12]}"
