@@ -23,10 +23,26 @@ type AuditEvent = {
   createdAt?: string;
 };
 
+type ProcessingDiagnostics = {
+  status?: string;
+  stage?: string;
+  attemptCount?: number;
+  maxAttempts?: number;
+  availableAt?: string;
+  lockedAt?: string;
+  lockedBy?: string;
+  startedAt?: string;
+  completedAt?: string;
+  failedAt?: string;
+  lastErrorCode?: string;
+  lastErrorMessage?: string;
+};
+
 type CallDetail = CallSummary & {
   transcript?: string;
   analysis?: unknown;
   errorMessage?: string;
+  processing?: ProcessingDiagnostics;
   events: AuditEvent[];
 };
 
@@ -98,6 +114,18 @@ const pickString = (
   return fallback;
 };
 
+const pickNumber = (record: ApiRecord, keys: string[]): number | undefined => {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && value.trim().length > 0) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return undefined;
+};
+
 const toStringList = (value: unknown): string[] => {
   if (!Array.isArray(value)) return [];
 
@@ -134,6 +162,51 @@ const normalizeSummary = (value: unknown): CallSummary | null => {
   };
 };
 
+const normalizeProcessingDiagnostics = (
+  value: unknown,
+  parent?: ApiRecord,
+): ProcessingDiagnostics | undefined => {
+  const record = toRecord(value);
+  if (!record && !parent) return undefined;
+
+  const source = record ?? parent;
+  if (!source) return undefined;
+
+  const diagnostics: ProcessingDiagnostics = {
+    status: pickString(source, ["status", "job_status", "jobStatus"]),
+    stage: pickString(source, [
+      "stage",
+      "current_stage",
+      "currentStage",
+      "processing_stage",
+      "processingStage",
+    ]),
+    attemptCount: pickNumber(source, [
+      "attempt_count",
+      "attemptCount",
+      "attempts",
+    ]),
+    maxAttempts: pickNumber(source, ["max_attempts", "maxAttempts"]),
+    availableAt: pickString(source, ["available_at", "availableAt"]),
+    lockedAt: pickString(source, ["locked_at", "lockedAt", "claimed_at", "claimedAt"]),
+    lockedBy: pickString(source, ["locked_by", "lockedBy", "worker", "worker_id"]),
+    startedAt: pickString(source, ["started_at", "startedAt"]),
+    completedAt: pickString(source, ["completed_at", "completedAt"]),
+    failedAt: pickString(source, ["failed_at", "failedAt"]),
+    lastErrorCode: pickString(source, ["last_error_code", "lastErrorCode"]),
+    lastErrorMessage: pickString(source, [
+      "last_error_message",
+      "lastErrorMessage",
+      "error_message",
+      "errorMessage",
+    ]),
+  };
+
+  return Object.values(diagnostics).some((value) => value !== undefined)
+    ? diagnostics
+    : undefined;
+};
+
 const normalizeEvent = (value: unknown): AuditEvent | null => {
   const record = toRecord(value);
   if (!record) return null;
@@ -159,6 +232,13 @@ const normalizeDetail = (value: unknown): CallDetail | null => {
   if (!summary || !record) return null;
 
   const transcriptRecord = toRecord(record.transcript);
+  const processingRecord =
+    toRecord(record.processing) ??
+    toRecord(record.processing_diagnostics) ??
+    toRecord(record.processingDiagnostics) ??
+    toRecord(record.job) ??
+    toRecord(record.job_diagnostics) ??
+    toRecord(record.jobDiagnostics);
   const events = Array.isArray(record.events)
     ? record.events
         .map(normalizeEvent)
@@ -178,6 +258,7 @@ const normalizeDetail = (value: unknown): CallDetail | null => {
       "errorMessage",
       "failure_reason",
     ]),
+    processing: normalizeProcessingDiagnostics(processingRecord, record),
     events,
   };
 };
@@ -311,6 +392,71 @@ const hasAnalysisContent = (analysis: AnalysisView | null) =>
       analysis?.nextAction ??
       analysis?.tags.length,
   );
+
+const formatStage = (value?: string) => {
+  if (!value) return "Processing";
+  return formatEventType(value);
+};
+
+const buildProcessingPanel = (call: CallSummary, detail: CallDetail | null) => {
+  const diagnostics = detail?.processing;
+  const jobStatus = diagnostics?.status?.toLowerCase() ?? call.status;
+  const isClaimed = Boolean(diagnostics?.lockedAt ?? diagnostics?.lockedBy);
+  const isFailed = call.status === "failed" || jobStatus === "failed";
+  const showPanel =
+    call.status === "queued" || call.status === "processing" || isFailed;
+
+  if (!showPanel) return null;
+
+  const isWaiting =
+    call.status === "queued" &&
+    !isClaimed &&
+    jobStatus !== "processing" &&
+    jobStatus !== "running";
+  const stage = isFailed ? "Failed" : formatStage(diagnostics?.stage);
+  const title = isFailed
+    ? "Processing needs attention"
+    : isWaiting
+      ? "Waiting for worker"
+      : "Processing active";
+  const message = isFailed
+    ? "The latest processing attempt did not complete."
+    : isWaiting
+      ? "This call is queued and will start when a worker is available."
+      : `The worker is running ${stage.toLowerCase()}.`;
+  const timingLabel = isFailed
+    ? "Failed"
+    : isClaimed
+      ? "Started"
+      : "Available";
+  const timingValue =
+    (isFailed ? diagnostics?.failedAt : undefined) ??
+    diagnostics?.startedAt ??
+    diagnostics?.lockedAt ??
+    diagnostics?.availableAt;
+  const attemptLabel =
+    diagnostics?.attemptCount !== undefined
+      ? diagnostics.maxAttempts !== undefined
+        ? `${diagnostics.attemptCount} of ${diagnostics.maxAttempts}`
+        : String(diagnostics.attemptCount)
+      : "Not available";
+
+  return {
+    title,
+    message,
+    tone: isFailed ? "failed" : isWaiting ? "waiting" : "active",
+    stage,
+    jobStatus: diagnostics?.status ?? STATUS_LABELS[call.status],
+    attemptLabel,
+    timingLabel,
+    timingValue,
+    lockedBy: diagnostics?.lockedBy,
+    lastError:
+      diagnostics?.lastErrorMessage ??
+      detail?.errorMessage ??
+      diagnostics?.lastErrorCode,
+  };
+};
 
 const renderTagGroups = (tags: TagCategory[]) => {
   if (tags.length === 0) {
@@ -503,6 +649,9 @@ function App() {
   const transcriptReady = Boolean(selectedCall?.transcript);
   const analysisFailed =
     displayedCall?.status === "failed" && transcriptReady && !analysisReady;
+  const processingPanel = displayedCall
+    ? buildProcessingPanel(displayedCall, selectedCall)
+    : null;
 
   return (
     <main className="app-shell" data-api-base-url={config.apiBaseUrl}>
@@ -665,6 +814,46 @@ function App() {
                         ? "The transcript is available, but analysis could not be completed for this call."
                         : "The backend could not process this file.")}
                   </p>
+                </section>
+              ) : null}
+
+              {processingPanel ? (
+                <section
+                  className="processing-panel"
+                  data-tone={processingPanel.tone}
+                  aria-label="Processing status"
+                >
+                  <div className="processing-panel-copy">
+                    <span>{processingPanel.stage}</span>
+                    <h3>{processingPanel.title}</h3>
+                    <p>{processingPanel.message}</p>
+                  </div>
+                  <dl className="processing-grid">
+                    <div>
+                      <dt>Job status</dt>
+                      <dd>{processingPanel.jobStatus}</dd>
+                    </div>
+                    <div>
+                      <dt>Attempts</dt>
+                      <dd>{processingPanel.attemptLabel}</dd>
+                    </div>
+                    <div>
+                      <dt>{processingPanel.timingLabel}</dt>
+                      <dd>{formatDate(processingPanel.timingValue)}</dd>
+                    </div>
+                    {processingPanel.lockedBy ? (
+                      <div>
+                        <dt>Worker</dt>
+                        <dd>{processingPanel.lockedBy}</dd>
+                      </div>
+                    ) : null}
+                    {processingPanel.lastError ? (
+                      <div className="processing-grid-wide">
+                        <dt>Last error</dt>
+                        <dd>{processingPanel.lastError}</dd>
+                      </div>
+                    ) : null}
+                  </dl>
                 </section>
               ) : null}
 
