@@ -13,23 +13,6 @@ The deployed demo runs the React frontend on Vercel and the FastAPI API,
 Postgres, audio storage volume, STT worker, and analysis worker on Railway.
 Provider API keys are configured as runtime secrets, not committed to the repo.
 
-## Reviewer Secrets
-
-The live demo already has provider keys configured. If reviewers need to run the
-project locally, share temporary low-quota ElevenLabs/OpenAI keys outside the
-repo:
-
-1. Create dedicated review keys, not personal or production keys.
-2. Put the `.env.docker.local` values in a password-protected secret link.
-   Prefer Bitwarden Send or 1Password item sharing because they support short
-   expiration windows and reviewer-friendly access controls. Use 1ty.me only
-   for a strict one-time handoff.
-3. Allow a small number of views, e.g. 3-5, so reviewers can reopen the secret
-   during setup without exposing it indefinitely.
-4. Send the link by email and the password/passphrase through a separate
-   channel.
-5. Rotate or revoke the keys after the review.
-
 ## What It Does
 
 - Uploads WAV/MP3 audio and returns immediately with a queued call.
