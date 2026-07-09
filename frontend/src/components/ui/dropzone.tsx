@@ -52,10 +52,12 @@ export function Dropzone({
   return (
     <div
       className="dropzone"
+      {...getRootProps()}
+      aria-label="Choose or drop one WAV or MP3 audio file"
       data-accept={isDragAccept}
       data-active={isDragActive}
       data-reject={isDragReject}
-      {...getRootProps()}
+      role="button"
     >
       <input {...getInputProps()} />
       <span className="dropzone-mark">+</span>

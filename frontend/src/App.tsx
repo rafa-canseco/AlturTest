@@ -358,6 +358,8 @@ function App() {
             />
             <button
               className="primary-button"
+              aria-busy={uploadState === "loading"}
+              data-loading={uploadState === "loading"}
               type="submit"
               disabled={uploadState === "loading"}
             >
@@ -410,7 +412,11 @@ function App() {
         </aside>
 
         <section className="detail-panel" aria-label="Call detail">
-          {notice ? <div className="notice">{notice}</div> : null}
+          {notice ? (
+            <div className="notice" role="status" aria-live="polite">
+              {notice}
+            </div>
+          ) : null}
 
           {!displayedCall ? (
             <div className="empty-detail">
