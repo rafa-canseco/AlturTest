@@ -39,6 +39,7 @@ from app.calls.service import (
 
 
 router = APIRouter(prefix="/calls", tags=["calls"])
+UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
 
 
 @router.post(
@@ -52,12 +53,16 @@ def create_call(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> CallSummaryResponse:
     service = _call_service(request)
-    content = file.file.read()
     try:
+        content, content_sha256 = _read_upload_with_limit(
+            file=file,
+            max_bytes=service.max_upload_bytes,
+        )
         record = service.ingest_call(
             filename=file.filename,
             content_type=file.content_type,
             content=content,
+            content_sha256=content_sha256,
             idempotency_key=idempotency_key,
         )
     except InvalidCallUploadError as exc:
@@ -76,6 +81,22 @@ def create_call(
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail) from exc
 
     return _summary_response(record)
+
+
+def _read_upload_with_limit(*, file: UploadFile, max_bytes: int) -> tuple[bytes, str]:
+    chunks: list[bytes] = []
+    total = 0
+    digest = sha256()
+    while True:
+        chunk = file.file.read(UPLOAD_READ_CHUNK_BYTES)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise InvalidCallUploadError("Audio upload exceeds the maximum size")
+        digest.update(chunk)
+        chunks.append(chunk)
+    return b"".join(chunks), digest.hexdigest()
 
 
 @router.get("", response_model=CallListResponse)

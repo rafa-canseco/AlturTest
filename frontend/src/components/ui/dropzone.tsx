@@ -1,6 +1,9 @@
 import { ReactNode, useCallback } from "react";
 import { FileRejection, useDropzone } from "react-dropzone";
 
+const MAX_UPLOAD_BYTES = 500 * 1024 * 1024;
+const MAX_UPLOAD_LABEL = "500 MB";
+
 type DropzoneProps = {
   file: File | null;
   onFileChange: (file: File | null) => void;
@@ -26,7 +29,7 @@ export function Dropzone({
         onFileChange(null);
         onReject(
           rejectedFile.errors[0]?.message ??
-            "Choose one WAV or MP3 file under 100 MB.",
+            `Choose one WAV or MP3 file under ${MAX_UPLOAD_LABEL}.`,
         );
         return;
       }
@@ -44,7 +47,7 @@ export function Dropzone({
         "audio/x-wav": [".wav"],
       },
       maxFiles: 1,
-      maxSize: 100 * 1024 * 1024,
+      maxSize: MAX_UPLOAD_BYTES,
       multiple: false,
       onDrop: handleDrop,
     });
@@ -70,7 +73,7 @@ export function Dropzone({
         <small>
           {file
             ? `${file.type || "audio"} / ${formatFileSize(file.size)}`
-            : "Click to browse. One file, 100 MB max."}
+            : `Click to browse. One file, ${MAX_UPLOAD_LABEL} max.`}
         </small>
         {children}
       </div>

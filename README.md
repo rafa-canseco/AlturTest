@@ -333,49 +333,28 @@ Tags are grouped this way because sales and operations users need both human-rea
 
 ## Testing
 
-Backend unit tests:
+Core checks:
 
 ```sh
-cd backend
-uv run pytest
+cd backend && uv run pytest
+cd frontend && bun run typecheck && bun run lint && bun run build
+cd holdout && uv run python -m unittest discover -s tests
 ```
 
-The default backend test suite uses fakes and does not require Supabase, ElevenLabs, or OpenAI.
-
-Opt-in local integration tests:
+Optional integration/evaluation checks:
 
 ```sh
-cd backend
-supabase start
-supabase db reset
-uv run pytest -m integration
-```
-
-Frontend checks:
-
-```sh
-cd frontend
-bun run typecheck
-bun run lint
-bun run build
-```
-
-Holdout evaluator, evaluator-owned only:
-
-```sh
-cd holdout
-uv run python -m unittest discover -s tests
-uv run holdout-evaluate \
+cd backend && supabase start && supabase db reset && uv run pytest -m integration
+cd holdout && uv run holdout-evaluate \
   --public-cases-dir public_cases \
   --actual-dir actual_outputs/baseline \
   --expected-dir expected \
   --report reports/baseline.json
 ```
 
-The holdout suite includes small synthetic transcript cases for escalation and
-damaged-order workflows. Reports expose aggregate pass/fail, field scores, and
-mismatched field names, not private expected values. Implementation work should
-receive only safe aggregate failures or behavioral notes.
+Backend tests use fakes for storage, STT, and LLM providers by default. Holdouts
+are evaluator-owned: expected answers stay private, while reports expose only
+aggregate pass/fail, field scores, and mismatched field names.
 
 ## Prompt And Tag Quality Strategy
 
@@ -406,20 +385,13 @@ Quality should be evaluated over time through:
 - If STT succeeds but LLM analysis fails, the transcript remains available.
 - Raw provider attempts are stored internally for debugging and are not exposed in the public call detail API.
 
-## Assumptions
-
-- This is a single-tenant take-home demo. Auth and multi-user isolation are documented as production work.
-- Local audio storage is acceptable for the demo. Production should use private object storage with signed access.
-- Postgres-backed jobs are sufficient for the take-home and explainable for 10k calls/day with worker scaling. A dedicated queue can replace it later without changing the API contract.
-- Workers are separate processes, not FastAPI startup tasks.
-- Provider calls are not mocked in the real demo path, but tests remain deterministic with fakes.
-
 ## What I Would Improve With More Time
 
-- Hosted preview deployment with managed database/storage.
 - JSON export.
 - Analytics dashboard for status and tag distribution.
 - Speaker role detection if provider diarization is reliable enough.
 - Authentication, tenant isolation, and row-level access controls.
 - PII redaction, retention policies, and deletion workflows.
-- Dedicated queue and dead-letter handling for larger production bursts.
+- Direct-to-object-storage uploads to avoid buffering large files in the API process.
+- Provider rate limits, concurrency caps, and a dead-letter queue for larger bursts.
+- More holdout cases from real reviewer-labeled transcripts to measure tag quality over time.

@@ -77,12 +77,17 @@ class CallService:
         self._storage_bucket = storage_bucket
         self._max_upload_bytes = max_upload_bytes
 
+    @property
+    def max_upload_bytes(self) -> int:
+        return self._max_upload_bytes
+
     def ingest_call(
         self,
         *,
         filename: str | None,
         content_type: str | None,
         content: bytes,
+        content_sha256: str | None = None,
         idempotency_key: str | None = None,
     ) -> CallRecord:
         validated_filename, extension = self._validate_upload(
@@ -100,6 +105,7 @@ class CallService:
                 filename=validated_filename,
                 content_type=content_type,
                 content=content,
+                content_sha256=content_sha256,
             )
             request_fingerprint_hash = _fingerprint_hash(request_fingerprint)
             try:
@@ -282,12 +288,13 @@ def _request_fingerprint(
     filename: str,
     content_type: str,
     content: bytes,
+    content_sha256: str | None = None,
 ) -> dict[str, object]:
     return {
         "filename": filename,
         "content_type": content_type,
         "file_size_bytes": len(content),
-        "content_sha256": hashlib.sha256(content).hexdigest(),
+        "content_sha256": content_sha256 or hashlib.sha256(content).hexdigest(),
     }
 
 

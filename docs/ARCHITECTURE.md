@@ -344,9 +344,8 @@ uv run holdout-evaluate \
 
 - Local Docker storage uses disk; the deployed demo uses a Railway volume. Production should use private object storage.
 - The deployed preview runs API and workers in one Railway service for shared audio access. Production should split workers into services backed by object storage.
+- Uploads are bounded and read in chunks, but the current storage abstraction still receives bytes in memory. Production should stream directly to private object storage or use signed direct uploads.
 - No authentication in the current take-home scope.
-- A live preview exists on Vercel/Railway.
-- Tag overrides have backend and frontend support.
 - Analytics dashboard is planned but not required for the core submission.
 - Speaker role detection is deferred until diarization quality is verified.
 
@@ -354,11 +353,10 @@ uv run holdout-evaluate \
 
 Highest-value next items:
 
-1. Reviewer-facing UI polish for summary and grouped tags.
-2. Live preview deployment.
-3. E2E local demo runbook.
-4. Tag overrides and JSON export.
-5. Docker Compose stack.
-6. Analytics dashboard.
-7. Speaker roles if provider metadata supports it cleanly.
-8. Auth and multi-user isolation only after core delivery is solid.
+1. Direct-to-object-storage uploads and separated deployed worker services.
+2. Provider rate limits, concurrency caps, and dead-letter handling.
+3. JSON export.
+4. Analytics dashboard.
+5. More holdout cases from reviewer-labeled transcripts.
+6. Speaker roles if provider metadata supports it cleanly.
+7. Auth and multi-user isolation.

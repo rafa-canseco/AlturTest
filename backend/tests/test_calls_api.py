@@ -241,6 +241,27 @@ def test_create_call_returns_safe_error_when_storage_fails() -> None:
     assert repository.created_calls == []
 
 
+def test_create_call_rejects_file_larger_than_configured_limit_before_storage() -> None:
+    repository = FakeCallRepository()
+    storage = FakeCallStorage()
+    app = create_app(
+        Settings(app_env="test", max_call_upload_bytes=4),
+        call_repository=repository,
+        call_storage=storage,
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/calls",
+        files={"file": ("sales.wav", b"abcde", "audio/wav")},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Audio upload exceeds the maximum size"
+    assert storage.uploads == []
+    assert repository.created_calls == []
+
+
 def test_create_call_deletes_uploaded_audio_when_repository_fails() -> None:
     repository = FakeCallRepository(fail_create=True)
     storage = FakeCallStorage()
