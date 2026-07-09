@@ -318,7 +318,7 @@ def test_list_calls_returns_safe_error_when_repository_unconfigured() -> None:
 
 def test_create_call_returns_safe_error_when_repository_unconfigured() -> None:
     storage = FakeCallStorage()
-    app = create_app(Settings(app_env="test"), call_storage=storage)
+    app = create_app(Settings(app_env="test", database_url=None), call_storage=storage)
     client = TestClient(app)
 
     response = client.post(
@@ -336,7 +336,7 @@ def test_create_call_returns_safe_error_when_repository_unconfigured() -> None:
 
 def test_create_call_with_idempotency_key_returns_safe_error_when_repository_unconfigured() -> None:
     storage = FakeCallStorage()
-    app = create_app(Settings(app_env="test"), call_storage=storage)
+    app = create_app(Settings(app_env="test", database_url=None), call_storage=storage)
     client = TestClient(app)
 
     response = client.post(
@@ -529,6 +529,8 @@ def test_postgres_call_repository_creates_upload_and_queue_events() -> None:
     assert "insert into processing_events" in constants
     assert "call.uploaded" in constants
     assert "job.queued" in constants
+    assert "%(content_type)s::text" in constants
+    assert "%(file_size_bytes)s::bigint" in constants
     assert "stage', 'transcription'" in constants
 
 
