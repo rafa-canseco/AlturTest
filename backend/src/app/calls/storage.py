@@ -27,6 +27,9 @@ class CallStorage(Protocol):
     def delete_audio(self, *, path: str, bucket: str) -> None:
         pass
 
+    def download_audio(self, *, path: str, bucket: str) -> bytes:
+        pass
+
 
 class SupabaseStorage:
     def __init__(self, supabase_url: str, service_role_key: str) -> None:
@@ -78,3 +81,19 @@ class SupabaseStorage:
                 return
         except (HTTPError, URLError, TimeoutError) as exc:
             raise CallStorageError("Failed to delete call audio") from exc
+
+    def download_audio(self, *, path: str, bucket: str) -> bytes:
+        object_path = quote(path, safe="/")
+        request = Request(
+            f"{self._supabase_url}/storage/v1/object/{bucket}/{object_path}",
+            method="GET",
+            headers={
+                "Authorization": f"Bearer {self._service_role_key}",
+                "apikey": self._service_role_key,
+            },
+        )
+        try:
+            with urlopen(request, timeout=60) as response:
+                return response.read()
+        except (HTTPError, URLError, TimeoutError) as exc:
+            raise CallStorageError("Failed to download call audio") from exc

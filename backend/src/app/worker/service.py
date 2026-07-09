@@ -20,7 +20,7 @@ class WorkerService:
             return False
 
         try:
-            self._processor.process(claimed_job)
+            result = self._processor.process(claimed_job)
         except CallProcessorError as exc:
             logger.exception(
                 "Call processor failed",
@@ -47,10 +47,16 @@ class WorkerService:
             return True
 
         try:
-            self._repository.complete_job(job_id=claimed_job.job.id, call_id=claimed_job.call.id)
+            if result.call_completed:
+                self._repository.complete_job(job_id=claimed_job.job.id, call_id=claimed_job.call.id)
+            else:
+                self._repository.mark_job_pending_analysis(
+                    job_id=claimed_job.job.id,
+                    call_id=claimed_job.call.id,
+                )
         except WorkerRepositoryError:
             logger.exception(
-                "Could not mark call processing job complete",
+                "Could not persist call processing job result",
                 extra={"job_id": str(claimed_job.job.id), "call_id": str(claimed_job.call.id)},
             )
             raise

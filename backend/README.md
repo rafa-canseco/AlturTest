@@ -51,9 +51,9 @@ uv run python -m app.worker
 ```
 
 The default worker claims queued jobs but uses a not-configured processor until
-STT and LLM integrations land. A claimed job will fail safely with
-`processor_not_configured` instead of being marked completed without transcript
-or analysis output.
+the required Supabase and ElevenLabs env vars are present. A claimed job will
+fail safely with `processor_not_configured` instead of being marked completed
+without transcript or analysis output.
 
 For local queue plumbing smoke checks only, process at most one queued job with
 the dev fake processor:
@@ -62,10 +62,11 @@ the dev fake processor:
 uv run python -m app.worker --once --dev-fake-processor
 ```
 
-The current worker is a skeleton: it atomically claims queued jobs, moves calls
-through `queued -> processing -> completed` or `failed`, records safe failure
-fields, and exposes a processor interface. ElevenLabs STT, OpenAI/LLM analysis,
-and real `call_analysis` writes are intentionally not implemented yet.
+With ElevenLabs configured, the worker downloads private audio from Supabase
+Storage, sends it to ElevenLabs Speech to Text, stores one transcript in
+`call_transcripts`, and leaves the call in `processing` for the later LLM
+analysis step. OpenAI/LLM analysis and `call_analysis` writes are intentionally
+not implemented yet.
 
 ## Supabase Contract
 
@@ -138,6 +139,18 @@ SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
 SUPABASE_STORAGE_BUCKET=call-audio
 ```
+
+Required ElevenLabs env vars for real STT:
+
+```sh
+ELEVENLABS_API_KEY=
+ELEVENLABS_STT_MODEL_ID=scribe_v1
+```
+
+`ELEVENLABS_API_KEY` must be provided by the runtime environment. Do not commit
+real API keys to source, tests, README files, or local env examples. The default
+test suite uses fakes and does not require ElevenLabs credentials or make live
+provider calls.
 
 Tests must not require live Supabase. Future repository and storage code should
 be written behind interfaces and covered with fakes or mocks by default.
