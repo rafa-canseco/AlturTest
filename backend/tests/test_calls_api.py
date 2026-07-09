@@ -294,6 +294,40 @@ def test_list_calls_returns_safe_error_when_repository_unconfigured() -> None:
     assert response.json()["detail"] == "Could not list calls"
 
 
+def test_create_call_returns_safe_error_when_repository_unconfigured() -> None:
+    storage = FakeCallStorage()
+    app = create_app(Settings(app_env="test"), call_storage=storage)
+    client = TestClient(app)
+
+    response = client.post(
+        "/calls",
+        files={"file": ("sales.wav", b"audio-bytes", "audio/wav")},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Could not queue uploaded call"
+    assert len(storage.uploads) == 1
+    assert storage.deletes == [
+        {"bucket": "call-audio", "path": storage.uploads[0]["path"]},
+    ]
+
+
+def test_create_call_with_idempotency_key_returns_safe_error_when_repository_unconfigured() -> None:
+    storage = FakeCallStorage()
+    app = create_app(Settings(app_env="test"), call_storage=storage)
+    client = TestClient(app)
+
+    response = client.post(
+        "/calls",
+        headers={"Idempotency-Key": "upload-123"},
+        files={"file": ("sales.wav", b"audio-bytes", "audio/wav")},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Could not queue uploaded call"
+    assert storage.uploads == []
+
+
 def test_get_call_returns_call_detail_without_results() -> None:
     call = _record(original_filename="sales.mp3")
     repository = FakeCallRepository(records=[call])
