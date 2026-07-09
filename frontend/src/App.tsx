@@ -206,7 +206,7 @@ const renderAnalysis = (analysis: unknown) => {
 
 const formatEventType = (value: string) =>
   value
-    .replace(/[_-]+/g, " ")
+    .replace(/[._-]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
