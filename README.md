@@ -2,6 +2,16 @@
 
 Take-home web app for uploading a WAV/MP3 sales call, processing it asynchronously, transcribing it with STT, analyzing the transcript with an LLM, and reviewing the result in a browser.
 
+## Live Demo
+
+- Frontend: https://altur-call-analyzer.vercel.app
+- Backend health: https://api-production-98cf.up.railway.app/health
+
+The deployed demo runs the React frontend on Vercel and the FastAPI API,
+Postgres, audio storage volume, STT worker, and analysis worker on Railway.
+The Railway API service has the ElevenLabs and OpenAI API keys configured as
+runtime environment variables. They are not committed to the repository.
+
 ## What Works
 
 - Upload WAV/MP3 audio through the React frontend.
@@ -20,6 +30,7 @@ backend/   FastAPI API, Postgres repositories, local audio storage, workers, mig
 frontend/  React/Vite UI managed with bun
 docs/      Architecture and production notes
 holdout/   Evaluator-owned AI quality harness
+samples/   Small sample MP3 files for reviewer testing
 ```
 
 Non-evaluator agents should not inspect `holdout/`. The evaluator can run it and share only safe aggregate feedback.
@@ -112,6 +123,34 @@ Docker uses local Postgres plus the backend's `LocalCallStorage` mounted at
 `/data/storage`. Supabase remote is not used for the Docker demo. Supabase
 remains a production-compatible option because the schema is plain Postgres and
 the storage contract is explicit.
+
+## Sample Audio Files
+
+These MP3 files are included so reviewers can try the app without hunting for
+test audio:
+
+- [English call center phone company](samples/audio/english-call-center-phone-company.mp3)
+- [Verbally abusive customer](samples/audio/verbally-abusive-customer.mp3)
+- [Order arrived damaged](samples/audio/order-arrived-damaged.mp3)
+
+They can be uploaded through either the deployed Vercel app or the local Docker
+Compose frontend.
+
+## Deployed Architecture
+
+The hosted preview uses:
+
+- Vercel for the static React/Vite frontend.
+- Railway Postgres for persisted call metadata, transcripts, analysis, tag
+  overrides, provider attempts, and audit events.
+- One Railway API service running FastAPI plus the STT and analysis workers in
+  the same container for the take-home demo.
+- A Railway volume mounted at `/data/storage` for private audio storage.
+
+This single Railway app service is a deliberate demo tradeoff: it keeps uploaded
+audio available to the workers without adding another storage provider. The code
+also includes an S3-compatible storage adapter, so production can split API and
+workers into separate services backed by object storage.
 
 ## Manual Environment
 
