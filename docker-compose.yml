@@ -1,0 +1,115 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: altur
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d altur"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    image: postgres:16-alpine
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: postgres
+    volumes:
+      - ./backend/supabase/migrations:/migrations:ro
+    command:
+      - sh
+      - -c
+      - |
+        for file in /migrations/*.sql; do
+          echo "Applying $$file"
+          psql -h db -U postgres -d altur -v ON_ERROR_STOP=1 -f "$$file"
+        done
+
+  backend:
+    build:
+      context: ./backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    env_file:
+      - path: .env.docker.example
+      - path: .env.docker.local
+        required: false
+    environment:
+      APP_ENV: docker
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/altur
+      LOCAL_STORAGE_ROOT: /data/storage
+    ports:
+      - "8000:8000"
+    volumes:
+      - call-storage:/data/storage
+
+  worker-stt:
+    build:
+      context: ./backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    env_file:
+      - path: .env.docker.example
+      - path: .env.docker.local
+        required: false
+    environment:
+      APP_ENV: docker
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/altur
+      LOCAL_STORAGE_ROOT: /data/storage
+    volumes:
+      - call-storage:/data/storage
+    command:
+      - python
+      - -m
+      - app.worker
+      - --stage
+      - stt
+      - --worker-id
+      - docker-stt
+
+  worker-analysis:
+    build:
+      context: ./backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    env_file:
+      - path: .env.docker.example
+      - path: .env.docker.local
+        required: false
+    environment:
+      APP_ENV: docker
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/altur
+      LOCAL_STORAGE_ROOT: /data/storage
+    volumes:
+      - call-storage:/data/storage
+    command:
+      - python
+      - -m
+      - app.worker
+      - --stage
+      - analysis
+      - --worker-id
+      - docker-analysis
+
+  frontend:
+    build:
+      context: ./frontend
+    depends_on:
+      - backend
+    environment:
+      VITE_API_BASE_URL: http://127.0.0.1:8000
+    ports:
+      - "5173:5173"
+
+volumes:
+  postgres-data:
+  call-storage:
