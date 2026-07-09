@@ -922,6 +922,54 @@ h4 {
   background: linear-gradient(180deg, rgb(251 253 253 / 0%), #fbfdfd 82%);
 }
 
+.insights-section {
+  background:
+    linear-gradient(180deg, transparent 0, rgb(248 252 252 / 78%) 100%);
+}
+
+.insight-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.insight-card {
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-paper);
+  padding: 13px 14px;
+}
+
+.insight-card[data-tone="alert"] {
+  border-color: #e3c49a;
+  background: #fffaf1;
+}
+
+.insight-card h4 {
+  margin-bottom: 10px;
+  color: var(--color-primary);
+}
+
+.insight-card[data-tone="alert"] h4 {
+  color: var(--color-warning);
+}
+
+.insight-card ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.insight-card li {
+  color: var(--color-muted-strong);
+  font-size: 0.92rem;
+  font-weight: 540;
+  line-height: 1.48;
+  overflow-wrap: anywhere;
+}
+
 .tag-section {
   background:
     linear-gradient(180deg, transparent 0, rgb(248 252 252 / 86%) 100%);
@@ -1423,6 +1471,9 @@ button.tag-chip:focus-visible {
     max-height: 320px;
   }
 
+  .insight-grid {
+    grid-template-columns: 1fr;
+  }
   .audit-shell {
     max-height: 360px;
   }
