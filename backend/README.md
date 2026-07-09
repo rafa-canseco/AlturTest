@@ -22,6 +22,26 @@ uv run pytest
 
 Configuration is loaded from environment variables. See `.env.example` for local values.
 
+## Worker
+
+Run the async call processing worker with:
+
+```sh
+uv run python -m app.worker
+```
+
+For local smoke checks, process at most one queued job:
+
+```sh
+uv run python -m app.worker --once
+```
+
+The current worker is a skeleton: it atomically claims queued jobs, moves calls
+through `queued -> processing -> completed` or `failed`, records safe failure
+fields, and exposes a processor interface. It uses a fake processor for now.
+ElevenLabs STT, OpenAI/LLM analysis, and real `call_analysis` writes are
+intentionally not implemented yet.
+
 ## Supabase Contract
 
 Supabase is managed through the Supabase CLI. The local project config lives in
