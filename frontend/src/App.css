@@ -391,6 +391,7 @@ h3 {
 .empty-copy,
 .empty-detail p,
 .failure-panel p,
+.audit-event p,
 .transcript-copy,
 .analysis-copy,
 .notice,
@@ -627,6 +628,112 @@ h3 {
   color: var(--color-danger);
 }
 
+.audit-section {
+  padding-bottom: 22px;
+}
+
+.audit-timeline {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.audit-event {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 12px;
+  position: relative;
+  padding: 0 0 16px;
+}
+
+.audit-event:not(:last-child)::before {
+  position: absolute;
+  top: 17px;
+  bottom: -1px;
+  left: 8px;
+  width: 2px;
+  border-radius: 999px;
+  background: var(--color-border);
+  content: "";
+}
+
+.audit-event-marker {
+  position: relative;
+  z-index: 1;
+  width: 18px;
+  aspect-ratio: 1;
+  border: 4px solid var(--color-primary-soft);
+  border-radius: 999px;
+  background: var(--color-ring);
+  box-shadow: 0 0 0 1px rgb(44 166 111 / 28%);
+}
+
+.audit-event-body {
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-raised);
+  padding: 12px;
+}
+
+.audit-event-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.audit-event-head strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-foreground);
+  font-size: 0.94rem;
+  font-weight: 760;
+  line-height: 1.2;
+}
+
+.audit-event-head time,
+.audit-event small {
+  color: var(--color-muted-strong);
+  font-size: 0.78rem;
+  font-weight: 620;
+  line-height: 1.3;
+}
+
+.audit-event-head time {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.audit-event p {
+  margin-bottom: 8px;
+}
+
+.audit-event small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.audit-metadata {
+  overflow: auto;
+  margin: 10px 0 0;
+  border: 1px solid #dfe7dc;
+  border-radius: var(--radius-control);
+  background: #f8faf5;
+  padding: 10px;
+  color: var(--color-foreground);
+  font-family:
+    "SFMono-Regular", ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono",
+    monospace;
+  font-size: 0.78rem;
+  font-weight: 560;
+  line-height: 1.45;
+}
+
 .transcript-copy,
 .analysis-copy {
   margin-bottom: 0;
@@ -740,5 +847,15 @@ h3 {
 
   .call-row em {
     grid-column: 2;
+  }
+
+  .audit-event-head {
+    align-items: start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .audit-event-head time {
+    text-align: left;
   }
 }
