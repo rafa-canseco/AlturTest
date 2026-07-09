@@ -9,6 +9,7 @@ from app.calls.models import (
     CallAnalysisRecord,
     CallCreate,
     CallDetailRecord,
+    CallIdempotencyRecord,
     CallRecord,
     CallTranscriptRecord,
     ProcessingEventRecord,
@@ -49,6 +50,125 @@ def test_create_call_uploads_audio_and_queues_job() -> None:
     assert repository.created_calls[0].storage_path == upload["path"]
     assert repository.created_calls[0].status == "queued"
     assert repository.created_jobs == [call_id]
+    assert repository.idempotency_queries == []
+
+
+def test_create_call_without_idempotency_key_preserves_legacy_behavior() -> None:
+    repository = FakeCallRepository()
+    storage = FakeCallStorage()
+    client = _client(repository=repository, storage=storage)
+
+    first = client.post(
+        "/calls",
+        files={"file": ("Sales Call.mp3", b"audio-bytes", "audio/mpeg")},
+    )
+    second = client.post(
+        "/calls",
+        files={"file": ("Sales Call.mp3", b"audio-bytes", "audio/mpeg")},
+    )
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert first.json()["call_id"] != second.json()["call_id"]
+    assert len(storage.uploads) == 2
+    assert len(repository.created_jobs) == 2
+    assert repository.idempotency_queries == []
+
+
+def test_create_call_with_idempotency_key_creates_call_job_and_mapping() -> None:
+    repository = FakeCallRepository()
+    storage = FakeCallStorage()
+    client = _client(repository=repository, storage=storage)
+
+    response = client.post(
+        "/calls",
+        headers={"Idempotency-Key": "upload-123"},
+        files={"file": ("Sales Call.mp3", b"audio-bytes", "audio/mpeg")},
+    )
+
+    assert response.status_code == 201
+    call_id = UUID(response.json()["call_id"])
+    assert len(storage.uploads) == 1
+    assert repository.created_jobs == [call_id]
+    assert len(repository.idempotency_records) == 1
+    mapping = next(iter(repository.idempotency_records.values()))
+    assert mapping.call.id == call_id
+    assert mapping.request_fingerprint_hash
+    assert repository.request_fingerprints[call_id] == {
+        "filename": "Sales Call.mp3",
+        "content_type": "audio/mpeg",
+        "file_size_bytes": len(b"audio-bytes"),
+        "content_sha256": (
+            "15241589c52e7c4a511a160e040d12bab503cf5d0f586cba94889e554d8df241"
+        ),
+    }
+
+
+def test_create_call_retry_with_same_idempotency_key_returns_existing_call() -> None:
+    repository = FakeCallRepository()
+    storage = FakeCallStorage()
+    client = _client(repository=repository, storage=storage)
+
+    first = client.post(
+        "/calls",
+        headers={"Idempotency-Key": "upload-123"},
+        files={"file": ("Sales Call.mp3", b"audio-bytes", "audio/mpeg")},
+    )
+    second = client.post(
+        "/calls",
+        headers={"Idempotency-Key": "upload-123"},
+        files={"file": ("Sales Call.mp3", b"audio-bytes", "audio/mpeg")},
+    )
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert second.json() == first.json()
+    assert len(storage.uploads) == 1
+    assert len(repository.created_calls) == 1
+    assert len(repository.created_jobs) == 1
+
+
+def test_create_call_reusing_idempotency_key_with_different_request_returns_409() -> None:
+    repository = FakeCallRepository()
+    storage = FakeCallStorage()
+    client = _client(repository=repository, storage=storage)
+
+    first = client.post(
+        "/calls",
+        headers={"Idempotency-Key": "upload-123"},
+        files={"file": ("Sales Call.mp3", b"audio-bytes", "audio/mpeg")},
+    )
+    second = client.post(
+        "/calls",
+        headers={"Idempotency-Key": "upload-123"},
+        files={"file": ("Sales Call.mp3", b"different-audio", "audio/mpeg")},
+    )
+
+    assert first.status_code == 201
+    assert second.status_code == 409
+    assert second.json()["detail"] == (
+        "Idempotency-Key was already used for a different request"
+    )
+    assert len(storage.uploads) == 1
+    assert len(repository.created_calls) == 1
+    assert len(repository.created_jobs) == 1
+
+
+def test_create_call_with_idempotency_key_does_not_upload_when_lookup_fails() -> None:
+    repository = FakeCallRepository(fail_idempotency_lookup=True)
+    storage = FakeCallStorage()
+    client = _client(repository=repository, storage=storage)
+
+    response = client.post(
+        "/calls",
+        headers={"Idempotency-Key": "upload-123"},
+        files={"file": ("Sales Call.mp3", b"audio-bytes", "audio/mpeg")},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Could not queue uploaded call"
+    assert storage.uploads == []
+    assert repository.created_calls == []
 
 
 def test_create_call_rejects_invalid_file_type() -> None:
@@ -99,6 +219,26 @@ def test_create_call_deletes_uploaded_audio_when_repository_fails() -> None:
         {"bucket": "call-audio", "path": storage.uploads[0]["path"]},
     ]
     assert repository.created_jobs == []
+
+
+def test_create_call_with_idempotency_key_deletes_uploaded_audio_when_repository_fails() -> None:
+    repository = FakeCallRepository(fail_create=True)
+    storage = FakeCallStorage()
+    client = _client(repository=repository, storage=storage)
+
+    response = client.post(
+        "/calls",
+        headers={"Idempotency-Key": "upload-123"},
+        files={"file": ("sales.wav", b"audio-bytes", "audio/wav")},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Could not queue uploaded call"
+    assert len(storage.uploads) == 1
+    assert storage.deletes == [
+        {"bucket": "call-audio", "path": storage.uploads[0]["path"]},
+    ]
+    assert repository.idempotency_records == {}
 
 
 def test_create_call_reports_cleanup_failure_safely() -> None:
@@ -152,6 +292,40 @@ def test_list_calls_returns_safe_error_when_repository_unconfigured() -> None:
 
     assert response.status_code == 503
     assert response.json()["detail"] == "Could not list calls"
+
+
+def test_create_call_returns_safe_error_when_repository_unconfigured() -> None:
+    storage = FakeCallStorage()
+    app = create_app(Settings(app_env="test"), call_storage=storage)
+    client = TestClient(app)
+
+    response = client.post(
+        "/calls",
+        files={"file": ("sales.wav", b"audio-bytes", "audio/wav")},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Could not queue uploaded call"
+    assert len(storage.uploads) == 1
+    assert storage.deletes == [
+        {"bucket": "call-audio", "path": storage.uploads[0]["path"]},
+    ]
+
+
+def test_create_call_with_idempotency_key_returns_safe_error_when_repository_unconfigured() -> None:
+    storage = FakeCallStorage()
+    app = create_app(Settings(app_env="test"), call_storage=storage)
+    client = TestClient(app)
+
+    response = client.post(
+        "/calls",
+        headers={"Idempotency-Key": "upload-123"},
+        files={"file": ("sales.wav", b"audio-bytes", "audio/wav")},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Could not queue uploaded call"
+    assert storage.uploads == []
 
 
 def test_get_call_returns_call_detail_without_results() -> None:
@@ -336,6 +510,27 @@ def test_postgres_call_repository_creates_upload_and_queue_events() -> None:
     assert "stage', 'transcription'" in constants
 
 
+def test_postgres_call_repository_persists_idempotency_mapping() -> None:
+    constants = "\n".join(
+        str(constant).lower()
+        for constant in PostgresCallRepository.create_call_with_queued_job.__code__.co_consts
+    )
+
+    assert "insert into call_idempotency_keys" in constants
+    assert "request_fingerprint_hash" in constants
+    assert "call_id" in constants
+
+
+def test_postgres_call_repository_loads_idempotent_call() -> None:
+    constants = "\n".join(
+        str(constant).lower()
+        for constant in PostgresCallRepository.get_call_by_idempotency_key.__code__.co_consts
+    )
+
+    assert "from call_idempotency_keys" in constants
+    assert "join calls" in constants
+
+
 def test_postgres_call_repository_loads_events_in_created_order() -> None:
     constants = "\n".join(
         str(constant).lower()
@@ -354,16 +549,28 @@ class FakeCallRepository:
         details: dict[UUID, CallDetailRecord] | None = None,
         fail_create: bool = False,
         fail_detail: bool = False,
+        fail_idempotency_lookup: bool = False,
     ) -> None:
         self.records = {record.id: record for record in records or []}
         self.details = details or {}
         self.created_calls: list[CallCreate] = []
         self.created_jobs: list[UUID] = []
+        self.idempotency_queries: list[str] = []
+        self.idempotency_records: dict[str, CallIdempotencyRecord] = {}
+        self.request_fingerprints: dict[UUID, dict[str, object]] = {}
         self.list_limits: list[int] = []
         self.fail_create = fail_create
         self.fail_detail = fail_detail
+        self.fail_idempotency_lookup = fail_idempotency_lookup
 
-    def create_call_with_queued_job(self, call: CallCreate) -> CallRecord:
+    def create_call_with_queued_job(
+        self,
+        call: CallCreate,
+        *,
+        idempotency_key_hash: str | None = None,
+        request_fingerprint_hash: str | None = None,
+        request_fingerprint: dict[str, object] | None = None,
+    ) -> CallRecord:
         self.created_calls.append(call)
         if self.fail_create:
             raise CallRepositoryError("fake create failure")
@@ -380,7 +587,24 @@ class FakeCallRepository:
             status=call.status,
         )
         self.records[record.id] = record
+        if idempotency_key_hash is not None:
+            assert request_fingerprint_hash is not None
+            assert request_fingerprint is not None
+            self.idempotency_records[idempotency_key_hash] = CallIdempotencyRecord(
+                call=record,
+                request_fingerprint_hash=request_fingerprint_hash,
+            )
+            self.request_fingerprints[record.id] = request_fingerprint
         return record
+
+    def get_call_by_idempotency_key(
+        self,
+        idempotency_key_hash: str,
+    ) -> CallIdempotencyRecord | None:
+        self.idempotency_queries.append(idempotency_key_hash)
+        if self.fail_idempotency_lookup:
+            raise CallRepositoryError("fake idempotency lookup failure")
+        return self.idempotency_records.get(idempotency_key_hash)
 
     def list_calls(self, *, limit: int = 50) -> list[CallRecord]:
         self.list_limits.append(limit)

@@ -47,7 +47,10 @@ class _UnconfiguredCallRepository:
     def __init__(self, message: str) -> None:
         self._message = message
 
-    def create_call_with_queued_job(self, call: object) -> object:
+    def create_call_with_queued_job(self, call: object, **kwargs: object) -> object:
+        raise CallRepositoryError(self._message)
+
+    def get_call_by_idempotency_key(self, idempotency_key_hash: str) -> None:
         raise CallRepositoryError(self._message)
 
     def list_calls(self, *, limit: int = 50) -> list[object]:

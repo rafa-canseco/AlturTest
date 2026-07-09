@@ -32,6 +32,12 @@ class CallCreate:
 
 
 @dataclass(frozen=True)
+class CallIdempotencyRecord:
+    call: "CallRecord"
+    request_fingerprint_hash: str
+
+
+@dataclass(frozen=True)
 class CallRecord:
     id: UUID
     original_filename: str
