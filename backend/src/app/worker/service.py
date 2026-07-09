@@ -10,17 +10,27 @@ logger = logging.getLogger(__name__)
 
 
 class WorkerService:
-    def __init__(self, *, repository: WorkerRepository, processor: CallProcessor) -> None:
+    def __init__(
+        self,
+        *,
+        repository: WorkerRepository,
+        processor: CallProcessor,
+        claim_transcript_exists: bool | None = None,
+    ) -> None:
         self._repository = repository
         self._processor = processor
+        self._claim_transcript_exists = claim_transcript_exists
 
     def run_once(self, *, worker_id: str) -> bool:
-        claimed_job = self._repository.claim_next_job(worker_id=worker_id)
+        claimed_job = self._repository.claim_next_job(
+            worker_id=worker_id,
+            transcript_exists=self._claim_transcript_exists,
+        )
         if claimed_job is None:
             return False
 
         try:
-            self._processor.process(claimed_job)
+            result = self._processor.process(claimed_job)
         except CallProcessorError as exc:
             logger.exception(
                 "Call processor failed",
@@ -47,10 +57,16 @@ class WorkerService:
             return True
 
         try:
-            self._repository.complete_job(job_id=claimed_job.job.id, call_id=claimed_job.call.id)
+            if result.call_completed:
+                self._repository.complete_job(job_id=claimed_job.job.id, call_id=claimed_job.call.id)
+            else:
+                self._repository.mark_job_ready_for_analysis(
+                    job_id=claimed_job.job.id,
+                    call_id=claimed_job.call.id,
+                )
         except WorkerRepositoryError:
             logger.exception(
-                "Could not mark call processing job complete",
+                "Could not persist call processing job result",
                 extra={"job_id": str(claimed_job.job.id), "call_id": str(claimed_job.call.id)},
             )
             raise

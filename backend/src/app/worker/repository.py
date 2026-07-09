@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import UUID
 
 from psycopg import connect
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 from app.calls.models import CallProcessingJobRecord, ClaimedCallProcessingJob
 from app.calls.repository import _call_record_from_row, _datetime, _optional_datetime, _optional_str, _uuid
@@ -15,10 +16,18 @@ class WorkerRepositoryError(Exception):
 
 
 class WorkerRepository(Protocol):
-    def claim_next_job(self, *, worker_id: str) -> ClaimedCallProcessingJob | None:
+    def claim_next_job(
+        self,
+        *,
+        worker_id: str,
+        transcript_exists: bool | None = None,
+    ) -> ClaimedCallProcessingJob | None:
         pass
 
     def complete_job(self, *, job_id: UUID, call_id: UUID) -> None:
+        pass
+
+    def mark_job_ready_for_analysis(self, *, job_id: UUID, call_id: UUID) -> None:
         pass
 
     def fail_job(self, *, job_id: UUID, call_id: UUID, error_code: str, error_message: str) -> None:
@@ -27,33 +36,68 @@ class WorkerRepository(Protocol):
     def requeue_failed_job(self, *, call_id: UUID) -> bool:
         pass
 
+    def has_transcript(self, *, call_id: UUID) -> bool:
+        pass
+
+    def create_transcript(
+        self,
+        *,
+        call_id: UUID,
+        transcript: str,
+        stt_provider: str,
+        stt_model: str,
+        transcript_metadata: dict[str, Any],
+    ) -> bool:
+        pass
+
 
 class PostgresWorkerRepository:
     def __init__(self, database_url: str) -> None:
         self._database_url = database_url
 
-    def claim_next_job(self, *, worker_id: str) -> ClaimedCallProcessingJob | None:
+    def claim_next_job(
+        self,
+        *,
+        worker_id: str,
+        transcript_exists: bool | None = None,
+    ) -> ClaimedCallProcessingJob | None:
         try:
             with connect(self._database_url, row_factory=dict_row) as conn:
                 with conn.transaction():
                     with conn.cursor() as cur:
                         cur.execute(
                             """
-                            select j.*
+                            select
+                                j.*,
+                                exists (
+                                    select 1
+                                    from call_transcripts t
+                                    where t.call_id = j.call_id
+                                ) as transcript_exists
                             from call_processing_jobs j
                             join calls c on c.id = j.call_id
                             where j.status = 'queued'
                               and j.available_at <= now()
                               and j.attempt_count < j.max_attempts
                               and c.status <> 'completed'
+                              and (
+                                  %(transcript_exists)s::boolean is null
+                                  or exists (
+                                      select 1
+                                      from call_transcripts t
+                                      where t.call_id = j.call_id
+                                  ) = %(transcript_exists)s
+                              )
                             order by j.available_at asc, j.created_at asc
                             for update of j skip locked
                             limit 1
-                            """
+                            """,
+                            {"transcript_exists": transcript_exists},
                         )
                         job_row = cur.fetchone()
                         if job_row is None:
                             return None
+                        transcript_exists = bool(job_row["transcript_exists"])
 
                         cur.execute(
                             """
@@ -100,6 +144,7 @@ class PostgresWorkerRepository:
                         return ClaimedCallProcessingJob(
                             job=_job_record_from_row(claimed_job_row),
                             call=_call_record_from_row(call_row),
+                            transcript_exists=transcript_exists,
                         )
         except Exception as exc:
             raise WorkerRepositoryError("Failed to claim queued call processing job") from exc
@@ -137,6 +182,43 @@ class PostgresWorkerRepository:
                         )
         except Exception as exc:
             raise WorkerRepositoryError("Failed to complete call processing job") from exc
+
+    def mark_job_ready_for_analysis(self, *, job_id: UUID, call_id: UUID) -> None:
+        try:
+            with connect(self._database_url, row_factory=dict_row) as conn:
+                with conn.transaction():
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            update calls
+                            set status = 'processing',
+                                failed_at = null,
+                                error_code = null,
+                                error_message = null
+                            where id = %(call_id)s
+                              and status = 'processing'
+                            """,
+                            {"call_id": call_id},
+                        )
+                        cur.execute(
+                            """
+                            update call_processing_jobs
+                            set status = 'queued',
+                                available_at = now(),
+                                locked_at = null,
+                                locked_by = null,
+                                completed_at = null,
+                                failed_at = null,
+                                last_error_code = null,
+                                last_error_message = null
+                            where id = %(job_id)s
+                              and call_id = %(call_id)s
+                              and status = 'processing'
+                            """,
+                            {"job_id": job_id, "call_id": call_id},
+                        )
+        except Exception as exc:
+            raise WorkerRepositoryError("Failed to mark call processing job ready for analysis") from exc
 
     def fail_job(self, *, job_id: UUID, call_id: UUID, error_code: str, error_message: str) -> None:
         try:
@@ -224,6 +306,60 @@ class PostgresWorkerRepository:
                         return cur.rowcount > 0
         except Exception as exc:
             raise WorkerRepositoryError("Failed to requeue failed call processing job") from exc
+
+    def has_transcript(self, *, call_id: UUID) -> bool:
+        try:
+            with connect(self._database_url, row_factory=dict_row) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "select 1 from call_transcripts where call_id = %(call_id)s",
+                        {"call_id": call_id},
+                    )
+                    return cur.fetchone() is not None
+        except Exception as exc:
+            raise WorkerRepositoryError("Failed to check call transcript") from exc
+
+    def create_transcript(
+        self,
+        *,
+        call_id: UUID,
+        transcript: str,
+        stt_provider: str,
+        stt_model: str,
+        transcript_metadata: dict[str, Any],
+    ) -> bool:
+        try:
+            with connect(self._database_url, row_factory=dict_row) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        insert into call_transcripts (
+                            call_id,
+                            transcript,
+                            transcript_metadata,
+                            stt_provider,
+                            stt_model
+                        )
+                        values (
+                            %(call_id)s,
+                            %(transcript)s,
+                            %(transcript_metadata)s,
+                            %(stt_provider)s,
+                            %(stt_model)s
+                        )
+                        on conflict (call_id) do nothing
+                        """,
+                        {
+                            "call_id": call_id,
+                            "transcript": transcript,
+                            "transcript_metadata": Jsonb(transcript_metadata),
+                            "stt_provider": stt_provider,
+                            "stt_model": stt_model,
+                        },
+                    )
+                    return cur.rowcount == 1
+        except Exception as exc:
+            raise WorkerRepositoryError("Failed to create call transcript") from exc
 
 
 def _job_record_from_row(row: dict[str, object]) -> CallProcessingJobRecord:
