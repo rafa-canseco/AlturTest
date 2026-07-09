@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from app.calls.models import CallCreate, CallRecord
+from app.calls.models import CallCreate, CallDetailRecord, CallRecord
 from app.calls.repository import CallRepository, CallRepositoryError
 from app.calls.storage import CallStorage, CallStorageError
 
@@ -125,6 +125,12 @@ class CallService:
     def get_call(self, call_id: UUID) -> CallRecord | None:
         try:
             return self._repository.get_call(call_id)
+        except CallRepositoryError as exc:
+            raise CallPersistenceError("Could not load call") from exc
+
+    def get_call_detail(self, call_id: UUID) -> CallDetailRecord | None:
+        try:
+            return self._repository.get_call_detail(call_id)
         except CallRepositoryError as exc:
             raise CallPersistenceError("Could not load call") from exc
 
