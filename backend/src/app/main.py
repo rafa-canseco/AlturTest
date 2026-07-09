@@ -60,6 +60,15 @@ class _UnconfiguredCallRepository:
     def get_call_detail(self, call_id: object) -> None:
         raise CallRepositoryError(self._message)
 
+    def list_tag_overrides(self, call_id: object) -> None:
+        raise CallRepositoryError(self._message)
+
+    def create_tag_override(self, override: object) -> None:
+        raise CallRepositoryError(self._message)
+
+    def delete_tag_override(self, **kwargs: object) -> None:
+        raise CallRepositoryError(self._message)
+
 
 class _UnconfiguredCallStorage:
     def __init__(self, message: str) -> None:

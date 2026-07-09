@@ -1,10 +1,19 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+TagOverrideField = Literal[
+    "call_outcome",
+    "customer_intent",
+    "sentiment",
+    "next_action",
+    "risk_flags",
+]
 
 
 class CallSummaryResponse(BaseModel):
@@ -41,6 +50,35 @@ class CallAnalysisResponse(BaseModel):
     raw_output: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class TagOverrideRequest(BaseModel):
+    field: TagOverrideField
+    override_value: Any
+    reason: str | None = Field(default=None, max_length=1000)
+    created_by: str | None = Field(default=None, max_length=255)
+
+    @field_validator("override_value")
+    @classmethod
+    def override_value_must_not_be_null(cls, value: Any) -> Any:
+        if value is None:
+            raise ValueError("override_value must not be null")
+        return value
+
+
+class TagOverrideResponse(BaseModel):
+    override_id: UUID
+    call_id: UUID
+    field: str
+    original_value: Any = None
+    override_value: Any
+    reason: str | None = None
+    created_by: str | None = None
+    created_at: datetime
+
+
+class TagOverrideListResponse(BaseModel):
+    overrides: list[TagOverrideResponse]
 
 
 class ProcessingEventResponse(BaseModel):

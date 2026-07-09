@@ -8,7 +8,14 @@ import logging
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from app.calls.models import CallCreate, CallDetailRecord, CallRecord
+from app.calls.models import (
+    CallAnalysisRecord,
+    CallCreate,
+    CallDetailRecord,
+    CallRecord,
+    TagOverrideCreate,
+    TagOverrideRecord,
+)
 from app.calls.repository import CallRepository, CallRepositoryError
 from app.calls.storage import CallStorage, CallStorageError
 
@@ -41,6 +48,18 @@ class CallPersistenceError(Exception):
 
 
 class IdempotencyConflictError(Exception):
+    pass
+
+
+class CallNotFoundError(Exception):
+    pass
+
+
+class CallAnalysisRequiredError(Exception):
+    pass
+
+
+class TagOverrideNotFoundError(Exception):
     pass
 
 
@@ -167,6 +186,57 @@ class CallService:
         except CallRepositoryError as exc:
             raise CallPersistenceError("Could not load call") from exc
 
+    def list_tag_overrides(self, call_id: UUID) -> list[TagOverrideRecord]:
+        try:
+            if self._repository.get_call(call_id) is None:
+                raise CallNotFoundError("Call not found")
+            return self._repository.list_tag_overrides(call_id)
+        except CallNotFoundError:
+            raise
+        except CallRepositoryError as exc:
+            raise CallPersistenceError("Could not list tag overrides") from exc
+
+    def create_tag_override(
+        self,
+        *,
+        call_id: UUID,
+        field: str,
+        override_value: object,
+        reason: str | None,
+        created_by: str | None,
+    ) -> TagOverrideRecord:
+        try:
+            detail = self._repository.get_call_detail(call_id)
+            if detail is None:
+                raise CallNotFoundError("Call not found")
+            if detail.analysis is None:
+                raise CallAnalysisRequiredError("Call analysis is required before overriding tags")
+            return self._repository.create_tag_override(
+                TagOverrideCreate(
+                    call_id=call_id,
+                    field=field,
+                    original_value=_analysis_field_value(detail.analysis, field),
+                    override_value=override_value,
+                    reason=reason,
+                    created_by=created_by,
+                )
+            )
+        except (CallNotFoundError, CallAnalysisRequiredError):
+            raise
+        except CallRepositoryError as exc:
+            raise CallPersistenceError("Could not create tag override") from exc
+
+    def delete_tag_override(self, *, call_id: UUID, override_id: UUID) -> None:
+        try:
+            if self._repository.get_call(call_id) is None:
+                raise CallNotFoundError("Call not found")
+            if not self._repository.delete_tag_override(call_id=call_id, override_id=override_id):
+                raise TagOverrideNotFoundError("Tag override not found")
+        except (CallNotFoundError, TagOverrideNotFoundError):
+            raise
+        except CallRepositoryError as exc:
+            raise CallPersistenceError("Could not delete tag override") from exc
+
     def _validate_upload(
         self,
         *,
@@ -228,3 +298,15 @@ def _fingerprint_hash(fingerprint: dict[str, object]) -> str:
 
 def _hash_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _analysis_field_value(analysis: CallAnalysisRecord, field: str) -> object:
+    if field in {"call_outcome", "customer_intent"}:
+        return analysis.tags.get(field)
+    if field == "sentiment":
+        return analysis.sentiment
+    if field == "next_action":
+        return analysis.next_action
+    if field == "risk_flags":
+        return analysis.risk_flags
+    return None

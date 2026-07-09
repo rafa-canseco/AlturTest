@@ -17,6 +17,8 @@ from app.calls.models import (
     CallRecord,
     CallTranscriptRecord,
     ProcessingEventRecord,
+    TagOverrideCreate,
+    TagOverrideRecord,
 )
 
 
@@ -48,6 +50,15 @@ class CallRepository(Protocol):
         pass
 
     def get_call_detail(self, call_id: UUID) -> CallDetailRecord | None:
+        pass
+
+    def list_tag_overrides(self, call_id: UUID) -> list[TagOverrideRecord]:
+        pass
+
+    def create_tag_override(self, override: TagOverrideCreate) -> TagOverrideRecord:
+        pass
+
+    def delete_tag_override(self, *, call_id: UUID, override_id: UUID) -> bool:
         pass
 
 
@@ -322,6 +333,82 @@ class PostgresCallRepository:
         except Exception as exc:
             raise CallRepositoryError("Failed to get call detail") from exc
 
+    def list_tag_overrides(self, call_id: UUID) -> list[TagOverrideRecord]:
+        try:
+            with connect(self._database_url, row_factory=dict_row) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        select *
+                        from tag_overrides
+                        where call_id = %(call_id)s
+                        order by created_at desc, id desc
+                        """,
+                        {"call_id": call_id},
+                    )
+                    return [_tag_override_record_from_row(row) for row in cur.fetchall()]
+        except Exception as exc:
+            raise CallRepositoryError("Failed to list tag overrides") from exc
+
+    def create_tag_override(self, override: TagOverrideCreate) -> TagOverrideRecord:
+        try:
+            with connect(self._database_url, row_factory=dict_row) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        insert into tag_overrides (
+                            call_id,
+                            field,
+                            original_value,
+                            override_value,
+                            reason,
+                            created_by
+                        )
+                        values (
+                            %(call_id)s,
+                            %(field)s,
+                            %(original_value)s,
+                            %(override_value)s,
+                            %(reason)s,
+                            %(created_by)s
+                        )
+                        returning *
+                        """,
+                        {
+                            "call_id": override.call_id,
+                            "field": override.field,
+                            "original_value": Jsonb(override.original_value),
+                            "override_value": Jsonb(override.override_value),
+                            "reason": override.reason,
+                            "created_by": override.created_by,
+                        },
+                    )
+                    row = cur.fetchone()
+                    if row is None:
+                        raise CallRepositoryError("Tag override insert returned no row")
+                    return _tag_override_record_from_row(row)
+        except CallRepositoryError:
+            raise
+        except Exception as exc:
+            raise CallRepositoryError("Failed to create tag override") from exc
+
+    def delete_tag_override(self, *, call_id: UUID, override_id: UUID) -> bool:
+        try:
+            with connect(self._database_url, row_factory=dict_row) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        delete from tag_overrides
+                        where call_id = %(call_id)s
+                          and id = %(override_id)s
+                        returning id
+                        """,
+                        {"call_id": call_id, "override_id": override_id},
+                    )
+                    return cur.fetchone() is not None
+        except Exception as exc:
+            raise CallRepositoryError("Failed to delete tag override") from exc
+
 
 def _call_record_from_row(row: dict[str, object]) -> CallRecord:
     duration = row.get("duration_seconds")
@@ -395,6 +482,19 @@ def _analysis_record_from_row(row: dict[str, object]) -> CallAnalysisRecord:
         raw_llm_output=_optional_dict(row.get("raw_llm_output")),
         created_at=_datetime(row["created_at"]),
         updated_at=_datetime(row["updated_at"]),
+    )
+
+
+def _tag_override_record_from_row(row: dict[str, object]) -> TagOverrideRecord:
+    return TagOverrideRecord(
+        id=_uuid(row["id"]),
+        call_id=_uuid(row["call_id"]),
+        field=str(row["field"]),
+        original_value=row.get("original_value"),
+        override_value=row.get("override_value"),
+        reason=_optional_str(row.get("reason")),
+        created_by=_optional_str(row.get("created_by")),
+        created_at=_datetime(row["created_at"]),
     )
 
 
