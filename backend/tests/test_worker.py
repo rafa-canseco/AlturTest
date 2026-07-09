@@ -4,7 +4,13 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from app.calls.models import CallProcessingJobRecord, CallRecord, ClaimedCallProcessingJob
-from app.worker.processor import CallProcessorError, ProcessingResult
+from app.worker.__main__ import _build_processor
+from app.worker.processor import (
+    CallProcessorError,
+    FakeCallProcessor,
+    NotConfiguredCallProcessor,
+    ProcessingResult,
+)
 from app.worker.repository import PostgresWorkerRepository
 from app.worker.service import WorkerService
 
@@ -69,6 +75,33 @@ def test_worker_marks_job_failed_safely_when_processor_raises_unhandled_error() 
             "Unhandled processor error",
         ),
     ]
+
+
+def test_default_cli_processor_fails_jobs_instead_of_completing_without_real_processor() -> None:
+    claimed_job = _claimed_job()
+    repository = FakeWorkerRepository(claimed_job=claimed_job)
+    service = WorkerService(
+        repository=repository,
+        processor=_build_processor(use_dev_fake=False),
+    )
+
+    did_work = service.run_once(worker_id="worker-a")
+
+    assert did_work is True
+    assert repository.completed_jobs == []
+    assert repository.failed_jobs == [
+        (
+            claimed_job.job.id,
+            claimed_job.call.id,
+            "processor_not_configured",
+            "Call processor is not configured; STT and LLM processing are not implemented",
+        ),
+    ]
+
+
+def test_cli_fake_processor_requires_explicit_dev_flag() -> None:
+    assert isinstance(_build_processor(use_dev_fake=False), NotConfiguredCallProcessor)
+    assert isinstance(_build_processor(use_dev_fake=True), FakeCallProcessor)
 
 
 def test_postgres_worker_repository_uses_skip_locked_claim_and_clears_retry_fields() -> None:

@@ -30,17 +30,22 @@ Run the async call processing worker with:
 uv run python -m app.worker
 ```
 
-For local smoke checks, process at most one queued job:
+The default worker claims queued jobs but uses a not-configured processor until
+STT and LLM integrations land. A claimed job will fail safely with
+`processor_not_configured` instead of being marked completed without transcript
+or analysis output.
+
+For local queue plumbing smoke checks only, process at most one queued job with
+the dev fake processor:
 
 ```sh
-uv run python -m app.worker --once
+uv run python -m app.worker --once --dev-fake-processor
 ```
 
 The current worker is a skeleton: it atomically claims queued jobs, moves calls
 through `queued -> processing -> completed` or `failed`, records safe failure
-fields, and exposes a processor interface. It uses a fake processor for now.
-ElevenLabs STT, OpenAI/LLM analysis, and real `call_analysis` writes are
-intentionally not implemented yet.
+fields, and exposes a processor interface. ElevenLabs STT, OpenAI/LLM analysis,
+and real `call_analysis` writes are intentionally not implemented yet.
 
 ## Supabase Contract
 

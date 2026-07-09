@@ -23,7 +23,15 @@ class CallProcessor(Protocol):
 
 
 class FakeCallProcessor:
-    """Placeholder processor until STT and LLM integrations are added."""
+    """Dev-only processor for local queue plumbing checks."""
 
     def process(self, claimed_job: ClaimedCallProcessingJob) -> ProcessingResult:
         return ProcessingResult(message="Fake processor completed")
+
+
+class NotConfiguredCallProcessor:
+    def process(self, claimed_job: ClaimedCallProcessingJob) -> ProcessingResult:
+        raise CallProcessorError(
+            "Call processor is not configured; STT and LLM processing are not implemented",
+            code="processor_not_configured",
+        )
