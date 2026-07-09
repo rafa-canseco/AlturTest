@@ -524,6 +524,7 @@ def test_postgres_worker_repository_uses_skip_locked_claim_and_clears_retry_fiel
     assert "error_code = null" in constants
     assert "error_message = null" in constants
     assert "c.status <> 'completed'" in constants
+    assert "job_claimed" in constants
 
 
 def test_postgres_worker_repository_requeue_clears_failure_fields() -> None:
@@ -553,6 +554,8 @@ def test_postgres_worker_repository_requeues_stt_job_for_analysis_without_comple
     assert "status = 'queued'" in constants
     assert "available_at = now()" in constants
     assert "completed_at = null" in constants
+    assert "job_queued" in constants
+    assert "stage', 'analysis'" in constants
 
 
 def test_postgres_worker_repository_persists_analysis_idempotently() -> None:
@@ -564,6 +567,38 @@ def test_postgres_worker_repository_persists_analysis_idempotently() -> None:
     assert "insert into call_analysis" in constants
     assert "on conflict (call_id) do nothing" in constants
     assert "raw_llm_output" in constants
+    assert "analysis_succeeded" in constants
+
+
+def test_postgres_worker_repository_records_transcription_events_without_transcript_text() -> None:
+    constants = "\n".join(
+        str(constant).lower()
+        for constant in PostgresWorkerRepository.create_transcript.__code__.co_consts
+    )
+
+    assert "insert into call_transcripts" in constants
+    assert "stt_succeeded" in constants
+    assert "speech transcription completed" in constants
+    assert "transcript_metadata" in constants
+
+
+def test_postgres_worker_repository_records_failure_and_terminal_events() -> None:
+    constants = "\n".join(
+        str(constant).lower()
+        for constant in PostgresWorkerRepository.fail_job.__code__.co_consts
+    )
+
+    assert "call_failed" in constants
+    assert "error_code" in constants
+
+
+def test_postgres_worker_repository_records_terminal_completed_event() -> None:
+    constants = "\n".join(
+        str(constant).lower()
+        for constant in PostgresWorkerRepository.complete_job.__code__.co_consts
+    )
+
+    assert "call_completed" in constants
 
 
 class FakeWorkerRepository:

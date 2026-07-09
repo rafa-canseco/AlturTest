@@ -13,6 +13,7 @@ from app.calls.models import (
     CallDetailRecord,
     CallRecord,
     CallTranscriptRecord,
+    ProcessingEventRecord,
 )
 
 
@@ -89,8 +90,56 @@ class PostgresCallRepository:
                             """
                             insert into call_processing_jobs (call_id, status)
                             values (%(call_id)s, 'queued')
+                            returning id
                             """,
                             {"call_id": call.id},
+                        )
+                        job_row = cur.fetchone()
+                        if job_row is None:
+                            raise CallRepositoryError("Queued job insert returned no row")
+
+                        cur.execute(
+                            """
+                            insert into processing_events (
+                                call_id,
+                                event_type,
+                                message,
+                                metadata
+                            )
+                            values (
+                                %(call_id)s,
+                                'call_uploaded',
+                                'Call audio uploaded',
+                                jsonb_build_object(
+                                    'content_type', %(content_type)s,
+                                    'file_size_bytes', %(file_size_bytes)s
+                                )
+                            )
+                            """,
+                            {
+                                "call_id": call.id,
+                                "content_type": call.content_type,
+                                "file_size_bytes": call.file_size_bytes,
+                            },
+                        )
+                        cur.execute(
+                            """
+                            insert into processing_events (
+                                call_id,
+                                job_id,
+                                event_type,
+                                message,
+                                metadata
+                            )
+                            values (
+                                %(call_id)s,
+                                %(job_id)s,
+                                'job_queued',
+                                'Call processing job queued',
+                                jsonb_build_object('stage', 'transcription')
+                            )
+                            """,
+                            {"call_id": call.id, "job_id": job_row["id"]},
                         )
                         return _call_record_from_row(row)
         except CallRepositoryError:
@@ -146,6 +195,17 @@ class PostgresCallRepository:
                     )
                     analysis_row = cur.fetchone()
 
+                    cur.execute(
+                        """
+                        select *
+                        from processing_events
+                        where call_id = %(call_id)s
+                        order by created_at asc, id asc
+                        """,
+                        {"call_id": call_id},
+                    )
+                    event_rows = cur.fetchall()
+
                     return CallDetailRecord(
                         call=_call_record_from_row(call_row),
                         transcript=(
@@ -154,6 +214,7 @@ class PostgresCallRepository:
                             else None
                         ),
                         analysis=_analysis_record_from_row(analysis_row) if analysis_row else None,
+                        events=[_processing_event_record_from_row(row) for row in event_rows],
                     )
         except Exception as exc:
             raise CallRepositoryError("Failed to get call detail") from exc
@@ -214,8 +275,24 @@ def _analysis_record_from_row(row: dict[str, object]) -> CallAnalysisRecord:
     )
 
 
+def _processing_event_record_from_row(row: dict[str, object]) -> ProcessingEventRecord:
+    return ProcessingEventRecord(
+        id=_uuid(row["id"]),
+        call_id=_optional_uuid(row.get("call_id")),
+        job_id=_optional_uuid(row.get("job_id")),
+        event_type=str(row["event_type"]),
+        message=_optional_str(row.get("message")),
+        metadata=_dict(row.get("metadata")),
+        created_at=_datetime(row["created_at"]),
+    )
+
+
 def _uuid(value: object) -> UUID:
     return value if isinstance(value, UUID) else UUID(str(value))
+
+
+def _optional_uuid(value: object | None) -> UUID | None:
+    return _uuid(value) if value is not None else None
 
 
 def _datetime(value: object) -> datetime:

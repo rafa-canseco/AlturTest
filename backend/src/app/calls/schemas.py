@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class CallSummaryResponse(BaseModel):
@@ -43,6 +43,14 @@ class CallAnalysisResponse(BaseModel):
     updated_at: datetime
 
 
+class ProcessingEventResponse(BaseModel):
+    event_id: UUID
+    event_type: str
+    message: str | None = None
+    metadata: dict[str, Any]
+    created_at: datetime
+
+
 class CallDetailResponse(CallSummaryResponse):
     storage_bucket: str
     storage_path: str
@@ -54,6 +62,7 @@ class CallDetailResponse(CallSummaryResponse):
     updated_at: datetime
     transcript: CallTranscriptResponse | None = None
     analysis: CallAnalysisResponse | None = None
+    events: list[ProcessingEventResponse] = Field(default_factory=list)
 
 
 class CallListResponse(BaseModel):

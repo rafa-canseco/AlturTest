@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -108,10 +108,22 @@ class CallAnalysisRecord:
 
 
 @dataclass(frozen=True)
+class ProcessingEventRecord:
+    id: UUID
+    call_id: UUID | None
+    job_id: UUID | None
+    event_type: str
+    message: str | None
+    metadata: dict[str, Any]
+    created_at: datetime
+
+
+@dataclass(frozen=True)
 class CallDetailRecord:
     call: CallRecord
     transcript: CallTranscriptRecord | None = None
     analysis: CallAnalysisRecord | None = None
+    events: list[ProcessingEventRecord] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
