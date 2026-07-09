@@ -1,476 +1,360 @@
-# Architecture
+# Architecture And Production Notes
 
-## Goal
+This document explains the current implementation and the production reasoning behind it. It is written for the follow-up interview: what was built, why those tradeoffs are reasonable for the take-home, and what would change in production.
 
-Build a small but production-shaped call analyzer for sales recordings. The core workflow is:
+## Goals
 
-```text
-audio upload -> queued call -> async STT -> LLM analysis -> persisted result -> review UI
-```
+The challenge asks for a web app that can:
 
-The design optimizes for the take-home constraints:
+1. Upload WAV/MP3 sales call recordings.
+2. Transcribe each recording with STT.
+3. Analyze the transcript with an LLM.
+4. Persist audio metadata, transcript, summary, and tags.
+5. Show a call list and call detail UI.
+6. Handle long processing asynchronously.
+7. Include tests, error handling, and clear documentation.
 
-- uploads must return immediately;
-- calls can be up to 30 minutes long;
-- users may upload many calls in a short period;
-- AI output quality must be evaluated over time;
-- the system should be easy to run and explain.
-
-## System Components
+The built system follows this workflow:
 
 ```text
-React/Vite frontend
-  -> FastAPI backend
-    -> Supabase Storage for audio
-    -> Supabase Postgres for records, jobs, analysis, overrides
-
-Python worker
-  -> Supabase Postgres for queued jobs
-  -> Supabase Storage for audio input
-  -> ElevenLabs STT
-  -> OpenAI LLM analysis
-  -> Supabase Postgres for results
-
-Holdout evaluator
-  -> public input cases
-  -> private expected outputs
-  -> aggregate quality reports
+audio upload -> queued call -> STT worker -> analysis worker -> persisted result -> review UI
 ```
+
+## Components
 
 ### Frontend
 
-- React/Vite managed with `bun`.
-- Uploads WAV/MP3 files to the backend.
-- Displays call list and detail views.
-- Handles `queued`, `processing`, `completed`, and `failed` states.
-- Polling is acceptable for the take-home; server-sent events or realtime updates can be added later.
+- React/Vite app managed with `bun`.
+- Uploads WAV/MP3 files.
+- Lists calls and processing status.
+- Shows call detail with transcript, analysis, and audit trail.
+- Uses `VITE_API_BASE_URL` so local and deployed backends can differ.
 
 ### Backend API
 
-- FastAPI managed with `uv`.
-- Owns request validation, auth boundary if added later, storage writes, and database records.
-- Does not run STT or LLM work inside upload requests.
-- Returns a `call_id` immediately after persisting the audio and queueing work.
-
-### Worker
-
-- Python process managed with `uv`.
-- Polls Supabase Postgres for queued jobs.
-- Claims work atomically, updates status, calls providers, persists outputs.
-- Handles retries and records failure reasons.
-
-### Supabase Postgres
-
-Postgres is the source of truth for:
-
-- call metadata;
-- processing state;
-- job queue rows;
-- transcripts;
-- LLM summaries and tags;
-- user tag overrides;
-- optional processing events for audit/debugging.
-
-### Supabase Storage
-
-Audio files are stored in Supabase Storage from the start. The app does not maintain a separate local filesystem storage mode. Local development uses the same storage abstraction and Supabase env vars.
-
-### ElevenLabs STT
-
-ElevenLabs is used for speech-to-text. The integration should be isolated behind a provider adapter so tests can run without live provider calls.
-
-When available, store:
-
-- transcript text;
-- language/model metadata;
-- timestamps;
-- speaker or diarization metadata.
-
-### OpenAI LLM Analysis
-
-OpenAI is used for offline transcript analysis. The LLM output must be structured and validated before persistence.
-
-The analysis should produce:
-
-- summary;
-- sales tags;
-- customer intent;
-- sentiment or mood;
-- next action;
-- optional risk flags.
-
-Prompts must be versioned so future prompt changes can be evaluated against holdout results.
-
-## Primary Workflow
-
-1. User uploads a WAV/MP3 file through the frontend.
-2. Backend validates file type and metadata.
-3. Backend uploads the audio to Supabase Storage.
-4. Backend creates a `calls` row with status `queued`.
-5. Backend creates a `call_processing_jobs` row.
-6. Backend returns immediately with `call_id` and status.
-7. Worker atomically claims a queued job.
-8. Worker marks the call/job as `processing`.
-9. Worker downloads or streams the audio from Supabase Storage.
-10. Worker sends audio to ElevenLabs STT.
-11. Worker sends transcript to OpenAI for structured analysis.
-12. Worker validates LLM output against the expected schema.
-13. Worker persists transcript, summary, tags, model metadata, and prompt version.
-14. Worker marks the call as `completed`, or `failed` with a client-safe error.
-15. Frontend polls and renders the final details.
-
-## API Contracts
-
-Initial endpoints:
+- FastAPI app managed with `uv`.
+- Validates upload inputs.
+- Stores audio through a storage abstraction.
+- Creates `calls` and `call_processing_jobs` records in Postgres.
+- Returns quickly after queueing work.
+- Exposes:
 
 ```text
 POST /calls
 GET /calls
 GET /calls/{call_id}
+GET /health
 ```
 
-Later endpoints:
+### Workers
+
+Workers are separate Python processes, not request handlers.
+
+STT worker:
 
 ```text
-PATCH /calls/{call_id}/tags
-GET /calls/{call_id}/export
+claim queued job without transcript
+download audio
+call ElevenLabs STT
+store call_transcripts
+requeue same job for analysis
 ```
 
-### `POST /calls`
-
-Accepts multipart audio upload.
-
-Responsibilities:
-
-- validate content type and size;
-- store audio in Supabase Storage;
-- persist call metadata;
-- queue a processing job;
-- return quickly.
-
-Response shape:
-
-```json
-{
-  "id": "call_123",
-  "status": "queued",
-  "filename": "sales-call.mp3",
-  "uploaded_at": "2026-07-08T00:00:00Z"
-}
-```
-
-### `GET /calls`
-
-Returns call summaries for list views.
-
-Include:
-
-- id;
-- filename;
-- upload timestamp;
-- status;
-- failure summary when applicable;
-- compact summary/tags when completed.
-
-### `GET /calls/{call_id}`
-
-Returns full call detail.
-
-Include:
-
-- metadata;
-- processing status;
-- transcript;
-- summary;
-- tags;
-- prompt/model metadata;
-- tag overrides;
-- error information when failed.
-
-## Tentative Data Model
-
-### `calls`
-
-Stores user-visible call records.
-
-Key fields:
-
-- `id`;
-- `filename`;
-- `content_type`;
-- `file_size_bytes`;
-- `storage_bucket`;
-- `storage_path`;
-- `uploaded_at`;
-- `status`;
-- `error_code`;
-- `error_message`;
-- `created_at`;
-- `updated_at`.
-
-Statuses:
+Analysis worker:
 
 ```text
-queued
-processing
-completed
-failed
+claim queued job with transcript
+read transcript
+call OpenAI
+validate strict schema
+store call_analysis
+complete job and call
 ```
 
-### `call_processing_jobs`
+This split is intentionally simple. It lets STT success be preserved even if LLM analysis fails.
 
-Postgres-backed queue.
+### Database
 
-Key fields:
+Postgres is the source of truth.
 
-- `id`;
-- `call_id`;
-- `status`;
-- `attempt_count`;
-- `max_attempts`;
-- `available_at`;
-- `locked_at`;
-- `locked_by`;
-- `last_error`;
-- `created_at`;
-- `updated_at`.
+Key tables:
 
-Workers claim jobs using a transaction and row locking, for example `FOR UPDATE SKIP LOCKED`.
+- `calls`: user-visible call metadata, status, storage path, client-safe errors.
+- `call_processing_jobs`: Postgres-backed job queue.
+- `call_transcripts`: one STT transcript per call.
+- `call_analysis`: one validated LLM analysis per call.
+- `call_provider_attempts`: internal raw STT/LLM provider attempts for debugging.
+- `processing_events`: safe audit timeline shown in the UI.
+- `call_idempotency_keys`: optional upload retry protection.
+- `tag_overrides`: schema exists for future human corrections.
 
-### `call_analysis`
+### Storage
 
-Stores AI outputs.
+The local demo stores audio on disk through `LocalCallStorage` under `backend/.data/storage`. The database still records `storage_bucket` and `storage_path`, so replacing local disk with private object storage is straightforward.
 
-Key fields:
+Production should use private object storage, for example Supabase Storage or S3-compatible storage, with signed access and explicit retention policies.
 
-- `id`;
-- `call_id`;
-- `transcript`;
-- `transcript_metadata`;
-- `summary`;
-- `tags`;
-- `intent`;
-- `sentiment`;
-- `next_action`;
-- `risk_flags`;
-- `stt_provider`;
-- `stt_model`;
-- `llm_provider`;
-- `llm_model`;
-- `prompt_version`;
-- `raw_llm_output`;
-- `created_at`;
-- `updated_at`.
+## Why Upload Returns Immediately
 
-### `tag_overrides`
+Calls can be up to 30 minutes long, and STT plus LLM processing can take several minutes. Running providers inside `POST /calls` would create a slow, fragile request path and would fail under browser timeouts or provider latency.
 
-Stores user corrections separately from model output.
+Instead, `POST /calls` does only the minimum synchronous work:
 
-Key fields:
+1. Validate file type, extension, size, and content.
+2. Store audio.
+3. Persist call metadata.
+4. Queue a job.
+5. Return `call_id` and `queued` status.
 
-- `id`;
-- `call_id`;
-- `field`;
-- `original_value`;
-- `override_value`;
-- `reason`;
-- `created_at`;
-- `created_by`.
+The UI then shows queued/processing/completed/failed states and can poll for updates.
 
-### `processing_events`
+## Queue Design
 
-Optional audit/debug table.
+The current queue is Postgres-backed via `call_processing_jobs`.
 
-Useful for:
+Workers claim jobs with row locking:
 
-- tracking status transitions;
-- provider latency;
-- retry reasons;
-- debugging failed jobs.
+```text
+FOR UPDATE SKIP LOCKED
+```
 
-## Queue Decision
+Why this is reasonable here:
 
-Use Postgres-backed jobs for this take-home.
-
-Rationale:
-
-- Supabase Postgres is already required.
-- It avoids adding Redis, RabbitMQ, RQ, or Celery before there is real operational need.
-- `FOR UPDATE SKIP LOCKED` supports multiple workers safely.
-- The design still scales horizontally by running more worker containers.
-- Failed jobs can be retried and inspected from the database.
+- Postgres is already required.
+- It avoids adding Redis, RabbitMQ, Celery, or a cloud queue too early.
+- It is easy to inspect during review.
+- Multiple workers can safely claim different jobs.
+- Retry state and failure state live next to the call records.
 
 What would change later:
 
-- move to SQS, Pub/Sub, RabbitMQ, or a managed workflow system if queue throughput or scheduling requirements outgrow Postgres;
-- add dead-letter queues;
-- add per-provider rate limit coordination;
-- add priority queues for enterprise workloads.
+- Move to SQS, Pub/Sub, RabbitMQ, Celery, or a workflow system if queue pressure grows.
+- Add dead-letter queues.
+- Add provider-specific concurrency controls.
+- Add priority queues for enterprise customers or retry classes.
 
-## Tagging Schema
+## LLM Prompt Design
 
-Initial controlled schema:
+OpenAI is called with a versioned prompt:
+
+```text
+altur-analysis-v1
+```
+
+The prompt asks for one aggregate analysis of the full transcript. This matters because real uploads can contain multiple segments or role-play examples; the API contract still expects one `summary`, one `intent`, one `sentiment`, and one `next_action`.
+
+The response is constrained with OpenAI JSON schema:
 
 ```json
 {
-  "call_outcome": "demo_booked | follow_up | interested | not_interested | wrong_person | no_decision",
-  "customer_intent": ["pricing_question", "product_fit", "implementation_question", "competitor_comparison", "support_need"],
-  "sentiment": "positive | neutral | negative | mixed",
-  "next_action": "send_info | schedule_demo | follow_up | escalate | close_lost | none",
-  "risk_flags": ["pii_shared", "compliance_issue", "angry_customer", "cancellation_risk"]
+  "summary": "string",
+  "tags": {
+    "topics": ["string"],
+    "customer_intents": ["string"],
+    "products": ["string"],
+    "risks": ["string"],
+    "outcomes": ["string"]
+  },
+  "intent": "string or null",
+  "sentiment": "positive | neutral | negative | mixed | null",
+  "next_action": "send_info | schedule_demo | follow_up | escalate | close_lost | none | null",
+  "risk_flags": ["string"]
 }
 ```
 
-Why these tags:
+The backend validates this output before persistence. Invalid JSON, wrong types, or unsupported enum values fail the job with `analysis_failed` and preserve the transcript.
 
-- sales teams care about outcome and next action;
-- managers care about objections and conversion patterns;
-- QA teams care about risk and sentiment;
-- controlled enums make analytics and holdout scoring possible.
+Raw provider attempts are stored internally in `call_provider_attempts`. They are useful for debugging prompt or provider failures, but they are not exposed to the public call detail API.
 
-## Prompt Design
+## Tagging Schema
 
-Prompts should live outside request handlers and be versioned.
+The current tagging schema is deliberately operational rather than decorative:
 
-Requirements:
+- `topics`: what subjects were discussed.
+- `customer_intents`: what the customer was trying to accomplish.
+- `products`: product or service areas mentioned.
+- `risks`: compliance, churn, anger, fraud, or escalation signals.
+- `outcomes`: what happened by the end of the call.
 
-- include the transcript and any available speaker/timestamp metadata;
-- define the tagging schema explicitly;
-- require JSON output;
-- prohibit unsupported claims;
-- ask the model to use `none` or empty arrays when evidence is missing;
-- include `prompt_version` in persisted analysis.
+The schema is useful for both individual review and aggregate analytics:
 
-LLM responses must be parsed and validated before writing to `call_analysis`. Invalid JSON or schema violations should fail the job with a useful error instead of storing partial output as if it were valid.
+- Sales managers can see common objections and outcomes.
+- Operations teams can track follow-up actions.
+- QA teams can scan for risk patterns.
+- Future dashboards can group tags consistently.
 
-## Holdout Evaluation
+The separate scalar fields remain useful:
 
-The holdout evaluator measures AI output quality without leaking expected answers.
+- `intent`: one dominant intent for the full call.
+- `sentiment`: overall emotional tone.
+- `next_action`: the operational action the team should take.
+- `risk_flags`: explicit warnings that need review.
 
-Rules:
+## Evaluating Tag Quality Over Time
 
-- non-evaluator agents do not read `holdout/`;
-- implementation agents do not see expected outputs or scoring internals;
-- the evaluator compares actual output against private expected data;
-- reports expose aggregate metrics and safe failure categories;
-- orchestrator passes only filtered feedback back to implementation agents.
+A one-off model response is not enough. Tag quality should be measured over time through:
 
-Useful metrics:
+- holdout transcripts with private expected outputs;
+- schema-invalid output rate;
+- tag precision and recall by category;
+- summary factuality sampling;
+- human review of representative calls;
+- comparison between generated tags and later human overrides;
+- drift checks by `prompt_version`, model, language, customer type, and call type.
 
-- tag precision/recall by category;
-- invalid schema count;
-- missing next-action count;
-- summary factuality notes;
-- provider error rate;
-- regressions by prompt version.
-
-This supports prompt changes over time without silently degrading tagging quality.
-
-## Docker And Local Development
-
-Docker should package:
-
-- backend API;
-- worker;
-- frontend.
-
-Supabase remains the managed DB/storage dependency. Local setup requires Supabase env vars rather than a separate local storage path.
-
-Expected env vars:
-
-```text
-SUPABASE_URL
-SUPABASE_SERVICE_ROLE_KEY
-SUPABASE_STORAGE_BUCKET
-DATABASE_URL
-ELEVENLABS_API_KEY
-OPENAI_API_KEY
-```
-
-For tests, provider and storage/database integrations should use fakes or mocks by default. Normal tests must not require live Supabase, ElevenLabs, or OpenAI access.
+The evaluator should expose safe aggregate reports, not expected answers. Implementation agents should receive behavioral feedback such as "missing follow-up tag on pricing objection cases", not hidden labels.
 
 ## Scaling To 10k Calls Per Day
 
-10k calls/day averages to about 7 calls/minute, but burstiness matters more than the average. A sales team may upload hundreds or thousands of recordings in a short window.
+10k calls/day averages to about 7 calls/minute. The harder problem is burstiness: a user might upload 1,000 recordings in a short window.
 
-Scaling levers:
+The current design scales through:
 
-- API remains lightweight because uploads only persist and queue work;
-- workers scale horizontally;
-- jobs are claimed with row locks;
-- provider calls use rate limiters and retries;
-- audio lives in object storage, not the API filesystem;
-- long-running work does not block web requests.
+- lightweight upload API;
+- object-storage-compatible audio storage;
+- Postgres-backed queue with row locks;
+- horizontally scalable STT workers;
+- horizontally scalable analysis workers;
+- separate STT and analysis stages;
+- idempotency keys for safe client retries;
+- audit events for operational visibility.
+
+For 10k/day, the first production version could still use Postgres jobs if provider limits and worker counts are controlled. The operational focus should be worker autoscaling, provider rate limits, queue depth monitoring, and retry/dead-letter behavior.
 
 ## Bottlenecks
 
 Likely bottlenecks:
 
-- ElevenLabs STT latency and rate limits;
-- OpenAI LLM latency and rate limits;
-- large audio upload bandwidth;
-- worker concurrency;
-- Postgres queue contention under large bursts;
-- cost per audio minute and per transcript token;
-- frontend polling load if many users watch processing in real time.
+- STT provider latency and rate limits.
+- OpenAI latency, token cost, and rate limits.
+- Audio upload bandwidth and file size.
+- Worker concurrency and CPU/memory for large files.
+- Postgres queue contention during bursts.
+- Frontend polling if many users watch live progress.
+- Storage cost and retention for raw audio.
+- Long transcripts increasing LLM token cost.
 
 Mitigations:
 
-- provider-specific concurrency limits;
-- exponential backoff;
-- job batching where safe;
-- separate read/write database concerns if needed;
-- CDN/object storage for audio;
-- polling intervals with backoff;
-- observability around provider latency and failure rates.
+- Use separate worker pools for STT and analysis.
+- Add provider-specific rate limiters.
+- Back off retries and cap attempts.
+- Move to a dedicated queue when queue depth or lock contention grows.
+- Use signed direct-to-object-storage uploads for very large files.
+- Add polling backoff or realtime updates.
+- Add transcript chunking/summarization if calls approach model limits.
+- Track provider latency, error rate, queue depth, and cost per call.
 
 ## Production Changes
 
-For production, add:
+Before production, I would add:
 
-- authentication and authorization;
-- Supabase RLS policies where appropriate;
-- signed upload/download URLs;
-- audit logs for tag overrides;
-- dead-letter handling for failed jobs;
-- metrics and tracing;
-- structured logs;
-- secret management;
-- rate limit management per provider;
-- retention and deletion workflows;
-- human review flows for low-confidence analysis.
+- authentication and tenant isolation;
+- private object storage with signed URLs;
+- least-privilege credentials and secret management;
+- row-level access controls where appropriate;
+- structured logs and tracing;
+- metrics for queue depth, provider latency, failures, and cost;
+- dead-letter queue or failed-job review workflow;
+- provider concurrency controls;
+- retention and deletion policies;
+- tag override UI and audit trail;
+- export/download support for call records;
+- deployment pipeline and environment separation;
+- backup/restore and migration runbooks.
 
-If queue pressure grows, replace Postgres-backed jobs with a dedicated queue while preserving the worker interface.
+If upload bursts or job volume outgrow Postgres-backed jobs, I would replace `call_processing_jobs` with a managed queue while keeping the worker processor interfaces.
 
-## PII Handling
+## PII Handling And Storage
 
-Call recordings and transcripts may contain sensitive personal data.
+Phone calls can contain names, phone numbers, account details, addresses, payment references, and other sensitive data.
 
-Baseline requirements:
+Current safeguards:
 
-- do not log raw audio, transcripts, or full LLM payloads in application logs;
-- store audio in private Supabase Storage buckets;
-- use least-privilege credentials where possible;
-- separate service-role credentials from frontend credentials;
-- expose client-safe error messages only;
-- define retention policy for audio and transcripts;
-- support deletion/export paths;
-- track tag overrides and manual edits;
-- consider redaction before sending transcripts to downstream analytics.
+- Audio files are not stored in Postgres.
+- Client-facing errors are safe and do not include provider internals.
+- Raw provider attempts are internal and not exposed by `GET /calls/{call_id}`.
+- Tests use fake provider data and do not require real customer recordings.
 
-Future improvements:
+Production requirements:
 
-- automatic PII detection/redaction;
-- customer-specific retention settings;
-- encrypted fields for especially sensitive transcript data;
-- access auditing;
-- role-based access control.
+- Store audio in private buckets only.
+- Use signed URLs or server-side download paths.
+- Encrypt data at rest through managed database/storage defaults and stronger controls where needed.
+- Avoid logging raw audio, transcript text, raw provider payloads, or API keys.
+- Restrict access to transcripts and provider attempts.
+- Add retention policies for audio, transcripts, and raw provider responses.
+- Support deletion and export workflows.
+- Consider PII detection/redaction before analytics or external sharing.
+- Audit manual overrides and administrative access.
+- Separate frontend-safe keys from backend service credentials.
 
-## Open Questions
+## Failure Handling
 
-- Exact file size limit for uploads.
-- Whether users need auth in the take-home scope.
-- Whether the worker should process one job type or separate STT and analysis job stages.
-- Which OpenAI model to use for cost/quality balance.
-- Whether diarization from ElevenLabs is reliable enough to expose as speaker roles in v1.
+Failure behavior is staged:
+
+- If upload validation fails, the API returns `400`.
+- If storage fails, the API returns `502`.
+- If DB queueing fails after upload, the API returns `503` and attempts audio cleanup.
+- If STT fails, the job/call fail with `stt_failed`.
+- If STT succeeds but LLM fails, transcript remains available.
+- If analysis output is invalid, the job/call fail with `analysis_failed`.
+- Failed jobs can be requeued if attempts remain.
+
+The UI should show partial value. A call with a failed analysis but a successful transcript should not hide the transcript.
+
+## Testing Strategy
+
+Default tests should be deterministic and fast:
+
+- API tests use fake storage/repositories.
+- Worker tests use fake STT and LLM clients.
+- LLM validation tests cover malformed output.
+- Integration tests against local Supabase/Postgres are opt-in.
+- Holdout tests are evaluator-owned and should not leak expected answers.
+
+Commands:
+
+```sh
+cd backend
+uv run pytest
+uv run pytest -m integration
+```
+
+```sh
+cd frontend
+bun run typecheck
+bun run lint
+bun run build
+```
+
+Evaluator-owned:
+
+```sh
+cd holdout
+uv run python -m unittest discover -s tests
+```
+
+## Known Tradeoffs
+
+- Local demo storage uses disk, not hosted object storage.
+- Workers are command-line processes, not deployed worker services yet.
+- No authentication in the current take-home scope.
+- No live deployment yet.
+- Tag overrides have schema support but no completed UI/API workflow yet.
+- Analytics dashboard is planned but not required for the core submission.
+- Speaker role detection is deferred until diarization quality is verified.
+
+## Next Improvements
+
+Highest-value next items:
+
+1. Reviewer-facing UI polish for summary and grouped tags.
+2. Live preview deployment.
+3. E2E local demo runbook.
+4. Tag overrides and JSON export.
+5. Docker Compose stack.
+6. Analytics dashboard.
+7. Speaker roles if provider metadata supports it cleanly.
+8. Auth and multi-user isolation only after core delivery is solid.
 
