@@ -463,6 +463,7 @@ h3 {
 .empty-copy,
 .empty-detail p,
 .failure-panel p,
+.processing-panel p,
 .audit-event p,
 .transcript-copy,
 .summary-copy,
@@ -703,6 +704,7 @@ h3 {
 }
 
 .failure-panel,
+.processing-panel,
 .detail-section {
   border-bottom: 1px solid var(--color-border);
   padding: 20px 0;
@@ -718,6 +720,98 @@ h3 {
 
 .failure-panel h3 {
   color: var(--color-danger);
+}
+
+.processing-panel {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.68fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+  border: 1px solid #bfe2e7;
+  border-radius: var(--radius-control);
+  background: #f4fbfc;
+  margin: 18px 0 0;
+  padding: 16px;
+}
+
+.processing-panel[data-tone="waiting"] {
+  border-color: #dfd39d;
+  background: #fffaf0;
+}
+
+.processing-panel[data-tone="active"] {
+  border-color: #a9d9df;
+  background: #effafb;
+}
+
+.processing-panel[data-tone="failed"] {
+  border-color: #efc3bd;
+  background: var(--color-danger-soft);
+}
+
+.processing-panel-copy {
+  min-width: 0;
+}
+
+.processing-panel-copy span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  border: 1px solid rgb(18 60 68 / 12%);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 68%);
+  padding: 5px 9px;
+  color: var(--color-muted-strong);
+  font-size: 0.72rem;
+  font-weight: 780;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+.processing-panel h3 {
+  margin-top: 10px;
+}
+
+.processing-panel p {
+  margin: 8px 0 0;
+}
+
+.processing-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.processing-grid div {
+  min-width: 0;
+  border: 1px solid rgb(18 60 68 / 10%);
+  border-radius: var(--radius-control);
+  background: rgb(255 255 255 / 72%);
+  padding: 11px 12px;
+}
+
+.processing-grid .processing-grid-wide {
+  grid-column: 1 / -1;
+}
+
+.processing-grid dt {
+  margin-bottom: 7px;
+  color: var(--color-muted);
+  font-size: 0.71rem;
+  font-weight: 780;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+.processing-grid dd {
+  margin-bottom: 0;
+  min-width: 0;
+  color: var(--color-foreground);
+  font-size: 0.91rem;
+  font-weight: 690;
+  line-height: 1.32;
+  overflow-wrap: anywhere;
 }
 
 .audit-section {
@@ -1087,7 +1181,9 @@ h3 {
   }
 
   .tag-group,
-  .ops-grid {
+  .ops-grid,
+  .processing-panel,
+  .processing-grid {
     grid-template-columns: 1fr;
   }
 }
