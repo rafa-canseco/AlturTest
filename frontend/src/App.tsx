@@ -337,7 +337,7 @@ function App() {
       <header className="top-bar">
         <div>
           <p className="eyebrow">Altur / Calls</p>
-          <h1>Upload. Track. Inspect.</h1>
+          <h1>Call operations</h1>
         </div>
         <button className="secondary-button" type="button" onClick={loadCalls}>
           Refresh
