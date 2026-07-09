@@ -114,6 +114,28 @@ class CallAnalysisRecord:
 
 
 @dataclass(frozen=True)
+class TagOverrideCreate:
+    call_id: UUID
+    field: str
+    original_value: Any
+    override_value: Any
+    reason: str | None
+    created_by: str | None
+
+
+@dataclass(frozen=True)
+class TagOverrideRecord:
+    id: UUID
+    call_id: UUID
+    field: str
+    original_value: Any
+    override_value: Any
+    reason: str | None
+    created_by: str | None
+    created_at: datetime
+
+
+@dataclass(frozen=True)
 class ProcessingEventRecord:
     id: UUID
     call_id: UUID | None

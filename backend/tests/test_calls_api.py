@@ -16,6 +16,8 @@ from app.calls.models import (
     CallTranscriptRecord,
     ProcessingEventRecord,
     StoredObject,
+    TagOverrideCreate,
+    TagOverrideRecord,
 )
 from app.calls.repository import CallRepositoryError, PostgresCallRepository
 from app.calls.storage import CallStorageError, LocalCallStorage
@@ -635,6 +637,157 @@ def test_get_call_returns_safe_error_when_repository_fails() -> None:
     assert response.json()["detail"] == "Could not load call"
 
 
+def test_create_tag_override_persists_original_value_without_mutating_analysis() -> None:
+    call = _record(original_filename="sales.mp3", status="completed")
+    analysis = _analysis_record(call_id=call.id)
+    repository = FakeCallRepository(
+        records=[call],
+        details={call.id: CallDetailRecord(call=call, analysis=analysis)},
+    )
+    client = _client(repository=repository, storage=FakeCallStorage())
+
+    response = client.post(
+        f"/calls/{call.id}/tag-overrides",
+        json={
+            "field": "customer_intent",
+            "override_value": "pricing",
+            "reason": "Reviewer correction",
+            "created_by": "ops@example.com",
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["call_id"] == str(call.id)
+    assert body["field"] == "customer_intent"
+    assert body["original_value"] == "demo"
+    assert body["override_value"] == "pricing"
+    assert body["reason"] == "Reviewer correction"
+    assert body["created_by"] == "ops@example.com"
+    assert body["created_at"] == "2026-07-08T12:00:00Z"
+    assert repository.created_tag_overrides[0].original_value == "demo"
+    assert analysis.tags == {"customer_intent": "demo"}
+
+
+def test_create_tag_override_uses_top_level_analysis_fields() -> None:
+    call = _record(original_filename="sales.mp3", status="completed")
+    analysis = _analysis_record(call_id=call.id)
+    repository = FakeCallRepository(
+        records=[call],
+        details={call.id: CallDetailRecord(call=call, analysis=analysis)},
+    )
+    client = _client(repository=repository, storage=FakeCallStorage())
+
+    response = client.post(
+        f"/calls/{call.id}/tag-overrides",
+        json={"field": "risk_flags", "override_value": ["legal_review"]},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["original_value"] == ["pricing_objection"]
+    assert repository.created_tag_overrides[0].field == "risk_flags"
+
+
+def test_create_tag_override_rejects_missing_analysis() -> None:
+    call = _record(original_filename="sales.mp3", status="processing")
+    repository = FakeCallRepository(records=[call])
+    client = _client(repository=repository, storage=FakeCallStorage())
+
+    response = client.post(
+        f"/calls/{call.id}/tag-overrides",
+        json={"field": "customer_intent", "override_value": "pricing"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Call analysis is required before overriding tags"
+    assert repository.created_tag_overrides == []
+
+
+def test_create_tag_override_rejects_invalid_field() -> None:
+    call = _record(original_filename="sales.mp3", status="completed")
+    analysis = _analysis_record(call_id=call.id)
+    repository = FakeCallRepository(
+        records=[call],
+        details={call.id: CallDetailRecord(call=call, analysis=analysis)},
+    )
+    client = _client(repository=repository, storage=FakeCallStorage())
+
+    response = client.post(
+        f"/calls/{call.id}/tag-overrides",
+        json={"field": "unsupported", "override_value": "pricing"},
+    )
+
+    assert response.status_code == 422
+    assert repository.created_tag_overrides == []
+
+
+def test_list_tag_overrides_returns_call_overrides() -> None:
+    call = _record(original_filename="sales.mp3", status="completed")
+    override = _tag_override_record(
+        call_id=call.id,
+        field="customer_intent",
+        original_value="demo",
+        override_value="pricing",
+    )
+    repository = FakeCallRepository(records=[call], tag_overrides={call.id: [override]})
+    client = _client(repository=repository, storage=FakeCallStorage())
+
+    response = client.get(f"/calls/{call.id}/tag-overrides")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "overrides": [
+            {
+                "override_id": str(override.id),
+                "call_id": str(call.id),
+                "field": "customer_intent",
+                "original_value": "demo",
+                "override_value": "pricing",
+                "reason": None,
+                "created_by": None,
+                "created_at": "2026-07-08T12:00:00Z",
+            }
+        ]
+    }
+
+
+def test_list_tag_overrides_returns_404_when_call_missing() -> None:
+    client = _client(repository=FakeCallRepository(), storage=FakeCallStorage())
+
+    response = client.get(f"/calls/{uuid4()}/tag-overrides")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Call not found"
+
+
+def test_delete_tag_override_removes_matching_override() -> None:
+    call = _record(original_filename="sales.mp3", status="completed")
+    override = _tag_override_record(
+        call_id=call.id,
+        field="customer_intent",
+        original_value="demo",
+        override_value="pricing",
+    )
+    repository = FakeCallRepository(records=[call], tag_overrides={call.id: [override]})
+    client = _client(repository=repository, storage=FakeCallStorage())
+
+    response = client.delete(f"/calls/{call.id}/tag-overrides/{override.id}")
+
+    assert response.status_code == 204
+    assert repository.tag_overrides[call.id] == []
+
+
+def test_delete_tag_override_returns_404_when_override_missing() -> None:
+    call = _record(original_filename="sales.mp3", status="completed")
+    repository = FakeCallRepository(records=[call])
+    client = _client(repository=repository, storage=FakeCallStorage())
+
+    response = client.delete(f"/calls/{call.id}/tag-overrides/{uuid4()}")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Tag override not found"
+
+
 def test_postgres_call_repository_creates_upload_and_queue_events() -> None:
     constants = "\n".join(
         str(constant).lower()
@@ -689,14 +842,17 @@ class FakeCallRepository:
         *,
         records: list[CallRecord] | None = None,
         details: dict[UUID, CallDetailRecord] | None = None,
+        tag_overrides: dict[UUID, list[TagOverrideRecord]] | None = None,
         fail_create: bool = False,
         fail_detail: bool = False,
         fail_idempotency_lookup: bool = False,
     ) -> None:
         self.records = {record.id: record for record in records or []}
         self.details = details or {}
+        self.tag_overrides = tag_overrides or {}
         self.created_calls: list[CallCreate] = []
         self.created_jobs: list[UUID] = []
+        self.created_tag_overrides: list[TagOverrideCreate] = []
         self.idempotency_queries: list[str] = []
         self.idempotency_records: dict[str, CallIdempotencyRecord] = {}
         self.request_fingerprints: dict[UUID, dict[str, object]] = {}
@@ -762,6 +918,29 @@ class FakeCallRepository:
             return self.details[call_id]
         call = self.records.get(call_id)
         return CallDetailRecord(call=call) if call is not None else None
+
+    def list_tag_overrides(self, call_id: UUID) -> list[TagOverrideRecord]:
+        return self.tag_overrides.get(call_id, [])
+
+    def create_tag_override(self, override: TagOverrideCreate) -> TagOverrideRecord:
+        self.created_tag_overrides.append(override)
+        record = _tag_override_record(
+            call_id=override.call_id,
+            field=override.field,
+            original_value=override.original_value,
+            override_value=override.override_value,
+            reason=override.reason,
+            created_by=override.created_by,
+        )
+        self.tag_overrides.setdefault(override.call_id, []).insert(0, record)
+        return record
+
+    def delete_tag_override(self, *, call_id: UUID, override_id: UUID) -> bool:
+        overrides = self.tag_overrides.get(call_id, [])
+        remaining = [override for override in overrides if override.id != override_id]
+        deleted = len(remaining) != len(overrides)
+        self.tag_overrides[call_id] = remaining
+        return deleted
 
 
 class FakeCallStorage:
@@ -916,6 +1095,27 @@ def _analysis_record(*, call_id: UUID) -> CallAnalysisRecord:
         raw_llm_output={"summary": "Customer requested a product demo."},
         created_at=now,
         updated_at=now,
+    )
+
+
+def _tag_override_record(
+    *,
+    call_id: UUID,
+    field: str,
+    original_value: object,
+    override_value: object,
+    reason: str | None = None,
+    created_by: str | None = None,
+) -> TagOverrideRecord:
+    return TagOverrideRecord(
+        id=uuid4(),
+        call_id=call_id,
+        field=field,
+        original_value=original_value,
+        override_value=override_value,
+        reason=reason,
+        created_by=created_by,
+        created_at=_dt("2026-07-08T12:00:00+00:00"),
     )
 
 

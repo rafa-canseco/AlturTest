@@ -11,6 +11,7 @@ from app.calls.models import (
     CallRecord,
     CallTranscriptRecord,
     ProcessingEventRecord,
+    TagOverrideRecord,
 )
 from app.calls.schemas import (
     CallAnalysisResponse,
@@ -20,13 +21,19 @@ from app.calls.schemas import (
     ProcessingEventResponse,
     CallSummaryResponse,
     CallTranscriptResponse,
+    TagOverrideListResponse,
+    TagOverrideRequest,
+    TagOverrideResponse,
 )
 from app.calls.service import (
+    CallAnalysisRequiredError,
     CallIngestionError,
     IdempotencyConflictError,
     CallPersistenceError,
+    CallNotFoundError,
     CallService,
     InvalidCallUploadError,
+    TagOverrideNotFoundError,
 )
 
 
@@ -98,6 +105,79 @@ def get_call(request: Request, call_id: UUID) -> CallDetailResponse:
     return _detail_response(detail)
 
 
+@router.get("/{call_id}/tag-overrides", response_model=TagOverrideListResponse)
+def list_tag_overrides(request: Request, call_id: UUID) -> TagOverrideListResponse:
+    service = _call_service(request)
+    try:
+        overrides = service.list_tag_overrides(call_id)
+    except CallNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Call not found") from exc
+    except CallPersistenceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not list tag overrides",
+        ) from exc
+    return TagOverrideListResponse(
+        overrides=[_tag_override_response(override) for override in overrides]
+    )
+
+
+@router.post(
+    "/{call_id}/tag-overrides",
+    response_model=TagOverrideResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_tag_override(
+    request: Request,
+    call_id: UUID,
+    payload: TagOverrideRequest,
+) -> TagOverrideResponse:
+    service = _call_service(request)
+    try:
+        override = service.create_tag_override(
+            call_id=call_id,
+            field=payload.field,
+            override_value=payload.override_value,
+            reason=payload.reason,
+            created_by=payload.created_by,
+        )
+    except CallNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Call not found") from exc
+    except CallAnalysisRequiredError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Call analysis is required before overriding tags",
+        ) from exc
+    except CallPersistenceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not create tag override",
+        ) from exc
+    return _tag_override_response(override)
+
+
+@router.delete(
+    "/{call_id}/tag-overrides/{override_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_tag_override(request: Request, call_id: UUID, override_id: UUID) -> None:
+    service = _call_service(request)
+    try:
+        service.delete_tag_override(call_id=call_id, override_id=override_id)
+    except CallNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Call not found") from exc
+    except TagOverrideNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tag override not found",
+        ) from exc
+    except CallPersistenceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not delete tag override",
+        ) from exc
+
+
 def _call_service(request: Request) -> CallService:
     return request.app.state.call_service
 
@@ -163,6 +243,19 @@ def _analysis_response(analysis: CallAnalysisRecord) -> CallAnalysisResponse:
         raw_output=analysis.raw_llm_output,
         created_at=analysis.created_at,
         updated_at=analysis.updated_at,
+    )
+
+
+def _tag_override_response(override: TagOverrideRecord) -> TagOverrideResponse:
+    return TagOverrideResponse(
+        override_id=override.id,
+        call_id=override.call_id,
+        field=override.field,
+        original_value=override.original_value,
+        override_value=override.override_value,
+        reason=override.reason,
+        created_by=override.created_by,
+        created_at=override.created_at,
     )
 
 
