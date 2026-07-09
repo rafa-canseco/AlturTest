@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     supabase_url: str | None = None
     supabase_service_role_key: str | None = None
     supabase_storage_bucket: str = "call-audio"
+    storage_backend: str = "local"
+    local_storage_root: str = ".data/storage"
     max_call_upload_bytes: int = 524_288_000
     elevenlabs_api_key: str | None = None
     elevenlabs_stt_model_id: str = "scribe_v1"

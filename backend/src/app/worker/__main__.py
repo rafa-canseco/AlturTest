@@ -6,7 +6,7 @@ import socket
 import time
 
 from app.config import get_settings
-from app.calls.storage import SupabaseStorage
+from app.calls.storage import CallStorage, LocalCallStorage, SupabaseStorage
 from app.worker.llm import OpenAIAnalysisClient
 from app.worker.processor import (
     AnalysisProcessor,
@@ -49,6 +49,8 @@ def main() -> None:
         use_dev_fake=args.dev_fake_processor,
         stage=args.stage,
         repository=repository,
+        storage_backend=settings.storage_backend,
+        local_storage_root=settings.local_storage_root,
         supabase_url=settings.supabase_url,
         supabase_service_role_key=settings.supabase_service_role_key,
         elevenlabs_api_key=settings.elevenlabs_api_key,
@@ -82,6 +84,8 @@ def _build_processor(
     use_dev_fake: bool,
     stage: str = "stt",
     repository: WorkerRepository | None = None,
+    storage_backend: str = "local",
+    local_storage_root: str = ".data/storage",
     supabase_url: str | None = None,
     supabase_service_role_key: str | None = None,
     elevenlabs_api_key: str | None = None,
@@ -92,19 +96,16 @@ def _build_processor(
 ) -> CallProcessor:
     if use_dev_fake:
         return FakeCallProcessor()
-    if (
-        stage == "stt"
-        and repository
-        and supabase_url
-        and supabase_service_role_key
-        and elevenlabs_api_key
-    ):
+    storage = _build_storage(
+        storage_backend=storage_backend,
+        local_storage_root=local_storage_root,
+        supabase_url=supabase_url,
+        supabase_service_role_key=supabase_service_role_key,
+    )
+    if stage == "stt" and repository and storage and elevenlabs_api_key:
         return TranscriptionProcessor(
             repository=repository,
-            storage=SupabaseStorage(
-                supabase_url=supabase_url,
-                service_role_key=supabase_service_role_key,
-            ),
+            storage=storage,
             stt_client=ElevenLabsSTTClient(
                 api_key=elevenlabs_api_key,
                 model_id=elevenlabs_stt_model_id,
@@ -120,6 +121,23 @@ def _build_processor(
             ),
         )
     return NotConfiguredCallProcessor()
+
+
+def _build_storage(
+    *,
+    storage_backend: str,
+    local_storage_root: str,
+    supabase_url: str | None,
+    supabase_service_role_key: str | None,
+) -> CallStorage | None:
+    if storage_backend == "local":
+        return LocalCallStorage(local_storage_root)
+    if storage_backend == "supabase" and supabase_url and supabase_service_role_key:
+        return SupabaseStorage(
+            supabase_url=supabase_url,
+            service_role_key=supabase_service_role_key,
+        )
+    return None
 
 
 def _claim_transcript_exists(

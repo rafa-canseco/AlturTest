@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from app.calls.repository import CallRepository, CallRepositoryError, PostgresCallRepository
 from app.calls.routes import router as calls_router
 from app.calls.service import CallService
-from app.calls.storage import CallStorage, CallStorageError, SupabaseStorage
+from app.calls.storage import CallStorage, CallStorageError, LocalCallStorage, SupabaseStorage
 from app.config import Settings, get_settings
 
 
@@ -38,6 +38,10 @@ def _build_call_repository(settings: Settings) -> CallRepository:
 
 
 def _build_call_storage(settings: Settings) -> CallStorage:
+    if settings.storage_backend == "local":
+        return LocalCallStorage(settings.local_storage_root)
+    if settings.storage_backend != "supabase":
+        return _UnconfiguredCallStorage(f"Unknown storage backend: {settings.storage_backend}")
     if settings.supabase_url and settings.supabase_service_role_key:
         return SupabaseStorage(settings.supabase_url, settings.supabase_service_role_key)
     return _UnconfiguredCallStorage("Supabase Storage is not configured")
@@ -71,6 +75,9 @@ class _UnconfiguredCallStorage:
         raise CallStorageError(self._message)
 
     def delete_audio(self, **kwargs: object) -> None:
+        raise CallStorageError(self._message)
+
+    def download_audio(self, **kwargs: object) -> bytes:
         raise CallStorageError(self._message)
 
 

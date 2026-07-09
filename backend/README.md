@@ -29,14 +29,13 @@ supabase start
 supabase db reset
 
 export DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:54322/postgres"
-export SUPABASE_URL="http://127.0.0.1:54321"
-export SUPABASE_SERVICE_ROLE_KEY="<service_role key from supabase status>"
 export SUPABASE_STORAGE_BUCKET="call-audio"
+export STORAGE_BACKEND="local"
 
 uv run pytest -m integration
 ```
 
-If the local Supabase env vars are missing or the local services are not
+If the local Supabase Postgres env var is missing or the local services are not
 reachable, integration tests skip with a clear reason instead of failing the
 normal unit suite.
 
@@ -134,13 +133,15 @@ When retrying a failed call or job, worker code must clear the corresponding
 failure fields (`failed_at`, error code, and error message) before moving it
 back to `queued` or `processing`.
 
-Supabase Storage contract:
+Call audio storage contract:
 
-- Bucket name: `call-audio`.
-- Access: private; only backend and worker service credentials should access
-  audio.
-- Creation: managed by the SQL migration through `storage.buckets`; no manual
-  dashboard step is required.
+- Default backend: local filesystem storage at `.data/storage`, configured with
+  `STORAGE_BACKEND=local` and `LOCAL_STORAGE_ROOT=.data/storage`.
+- Optional backend: Supabase Storage with `STORAGE_BACKEND=supabase`,
+  `SUPABASE_URL`, and `SUPABASE_SERVICE_ROLE_KEY`.
+- Bucket name: `call-audio`. For local storage this is a directory below the
+  local storage root; for Supabase Storage this is a private bucket managed by
+  the SQL migration.
 - Path convention:
   `calls/{call_id}/{original_filename_slug}-{upload_token}.{ext}`.
 - Persisted metadata: `storage_bucket`, `storage_path`, `content_type`,
@@ -176,10 +177,14 @@ Required Supabase env vars:
 
 ```sh
 DATABASE_URL=
-SUPABASE_URL=
-SUPABASE_SERVICE_ROLE_KEY=
 SUPABASE_STORAGE_BUCKET=call-audio
+STORAGE_BACKEND=local
+LOCAL_STORAGE_ROOT=.data/storage
 ```
+
+`SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are only required when
+`STORAGE_BACKEND=supabase`. The local demo path uses Supabase Docker for
+Postgres and local disk for audio, so it does not need a Supabase API key.
 
 Required ElevenLabs env vars for real STT:
 

@@ -16,7 +16,7 @@ from app.calls.models import (
     StoredObject,
 )
 from app.calls.repository import CallRepositoryError, PostgresCallRepository
-from app.calls.storage import CallStorageError
+from app.calls.storage import CallStorageError, LocalCallStorage
 from app.config import Settings
 from app.main import create_app
 
@@ -258,6 +258,28 @@ def test_create_call_reports_cleanup_failure_safely() -> None:
     assert storage.delete_attempts == 1
 
 
+def test_local_call_storage_upload_download_and_delete(tmp_path) -> None:
+    storage = LocalCallStorage(tmp_path)
+
+    stored = storage.upload_audio(
+        bucket="call-audio",
+        path="calls/call-id/sales.mp3",
+        content=b"audio-bytes",
+        content_type="audio/mpeg",
+    )
+
+    assert stored.bucket == "call-audio"
+    assert stored.path == "calls/call-id/sales.mp3"
+    assert stored.etag == "15241589c52e7c4a511a160e040d12bab503cf5d0f586cba94889e554d8df241"
+    assert storage.download_audio(bucket="call-audio", path="calls/call-id/sales.mp3") == (
+        b"audio-bytes"
+    )
+
+    storage.delete_audio(bucket="call-audio", path="calls/call-id/sales.mp3")
+
+    assert not (tmp_path / "call-audio" / "calls" / "call-id" / "sales.mp3").exists()
+
+
 def test_list_calls_returns_call_summaries() -> None:
     first = _record(original_filename="first.mp3", uploaded_at=_dt("2026-07-08T10:00:00+00:00"))
     second = _record(original_filename="second.wav", uploaded_at=_dt("2026-07-08T11:00:00+00:00"))
@@ -285,7 +307,7 @@ def test_list_calls_honors_limit_query_param() -> None:
 
 
 def test_list_calls_returns_safe_error_when_repository_unconfigured() -> None:
-    app = create_app(Settings(app_env="test"), call_storage=FakeCallStorage())
+    app = create_app(Settings(app_env="test", database_url=None), call_storage=FakeCallStorage())
     client = TestClient(app)
 
     response = client.get("/calls")
