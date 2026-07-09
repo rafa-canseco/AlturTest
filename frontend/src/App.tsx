@@ -92,12 +92,71 @@ const TAG_OVERRIDE_FIELDS: Array<{
   field: TagOverrideField;
   label: string;
   kind: "text" | "list";
+  options: string[];
 }> = [
-  { field: "customer_intent", label: "Customer intent", kind: "text" },
-  { field: "call_outcome", label: "Call outcome", kind: "text" },
-  { field: "sentiment", label: "Sentiment", kind: "text" },
-  { field: "next_action", label: "Next action", kind: "text" },
-  { field: "risk_flags", label: "Risk flags", kind: "list" },
+  {
+    field: "customer_intent",
+    label: "Customer intent",
+    kind: "text",
+    options: [
+      "resolve issue",
+      "seek compensation",
+      "request escalation",
+      "ask product question",
+      "pricing objection",
+      "purchase intent",
+      "cancel request",
+      "support request",
+    ],
+  },
+  {
+    field: "call_outcome",
+    label: "Call outcome",
+    kind: "text",
+    options: [
+      "resolved",
+      "issue not resolved",
+      "follow-up required",
+      "escalated",
+      "call disconnected",
+      "customer declined",
+      "customer satisfied",
+      "customer dissatisfied",
+    ],
+  },
+  {
+    field: "sentiment",
+    label: "Sentiment",
+    kind: "text",
+    options: ["positive", "neutral", "negative", "mixed"],
+  },
+  {
+    field: "next_action",
+    label: "Next action",
+    kind: "text",
+    options: [
+      "send info",
+      "schedule follow-up",
+      "schedule demo",
+      "escalate",
+      "retry contact",
+      "no action",
+    ],
+  },
+  {
+    field: "risk_flags",
+    label: "Risk flags",
+    kind: "list",
+    options: [
+      "verbal abuse",
+      "customer churn",
+      "reputational risk",
+      "compliance risk",
+      "legal review",
+      "payment risk",
+      "no risk flags",
+    ],
+  },
 ];
 
 type TagCategory = {
@@ -167,21 +226,6 @@ const toStringList = (value: unknown): string[] => {
       return pickString(record, ["label", "name", "value", "text"]);
     })
     .filter((item): item is string => Boolean(item));
-};
-
-const formatValue = (value: unknown): string => {
-  if (Array.isArray(value)) {
-    const values = value.map((item) =>
-      typeof item === "string" ? item.trim() : JSON.stringify(item),
-    );
-    return values.filter(Boolean).join(", ") || "None";
-  }
-  if (typeof value === "string") return value.trim() || "None";
-  if (value === undefined || value === null) return "None";
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  return JSON.stringify(value);
 };
 
 const normalizeSummary = (value: unknown): CallSummary | null => {
@@ -603,10 +647,8 @@ const activeOverridesByField = (overrides: TagOverride[]) =>
 
 const parseOverrideValue = (value: string, kind: "text" | "list") => {
   if (kind === "list") {
-    return value
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
+    const normalized = value.trim();
+    return normalized ? [normalized] : [];
   }
   return value.trim();
 };
@@ -620,8 +662,6 @@ const valueToList = (value: unknown): string[] => {
   }
   return [];
 };
-
-const valuesToInput = (values: string[]) => values.join(", ");
 
 const generatedValuesForField = (
   analysis: unknown,
@@ -653,8 +693,6 @@ function App() {
   const [editingTagField, setEditingTagField] =
     useState<TagOverrideField | null>(null);
   const [tagOverrideValue, setTagOverrideValue] = useState("");
-  const [tagOverrideReason, setTagOverrideReason] = useState("");
-  const [tagOverrideCreatedBy, setTagOverrideCreatedBy] = useState("");
 
   const loadCalls = useCallback(async () => {
     setListState((current) => (current === "ready" ? current : "loading"));
@@ -863,10 +901,6 @@ function App() {
         field: tagOverrideField,
         override_value: overrideValue,
       };
-      if (tagOverrideReason.trim()) body.reason = tagOverrideReason.trim();
-      if (tagOverrideCreatedBy.trim()) {
-        body.created_by = tagOverrideCreatedBy.trim();
-      }
 
       const response = await fetch(
         buildApiUrl(`/calls/${encodeURIComponent(selectedCallId)}/tag-overrides`),
@@ -883,7 +917,6 @@ function App() {
       }
 
       setTagOverrideValue("");
-      setTagOverrideReason("");
       setEditingTagField(null);
       setNotice("Tag override saved.");
       await loadTagOverrides(selectedCallId);
@@ -919,7 +952,6 @@ function App() {
       if (editingTagField === override.field) {
         setEditingTagField(null);
         setTagOverrideValue("");
-        setTagOverrideReason("");
       }
       await loadTagOverrides(selectedCallId);
     } catch (error) {
@@ -983,17 +1015,12 @@ function App() {
   const beginTagOverrideEdit = (field: TagOverrideField) => {
     const override = activeTagOverrides[field];
     const generatedValues = generatedValuesForField(selectedCall?.analysis, field);
+    const overrideValues = override ? valueToList(override.overrideValue) : [];
+    const fallbackValues = generatedValues.filter((value) => value !== "Not available");
 
     setEditingTagField(field);
     setTagOverrideField(field);
-    setTagOverrideValue(
-      override
-        ? formatValue(override.overrideValue)
-        : valuesToInput(
-            generatedValues.filter((value) => value !== "Not available"),
-          ),
-    );
-    setTagOverrideReason(override?.reason ?? "");
+    setTagOverrideValue(overrideValues[0] ?? fallbackValues[0] ?? "");
   };
 
   return (
@@ -1288,7 +1315,6 @@ function App() {
                       <div className="tag-group" key={category.key}>
                         <div className="tag-group-label">
                           <span>{category.label}</span>
-                          <small>AI generated</small>
                         </div>
                         <div className="tag-chip-list">
                           {category.values.map((value) => (
@@ -1306,6 +1332,17 @@ function App() {
                       const generatedCopy = fieldConfig.generatedValues.join(", ");
                       const canRevert =
                         isOverridden && tagOverrideSaveState === "idle";
+                      const selectOptions = Array.from(
+                        new Set([
+                          ...fieldConfig.currentValues.filter(
+                            (value) => value !== "Not available",
+                          ),
+                          ...fieldConfig.generatedValues.filter(
+                            (value) => value !== "Not available",
+                          ),
+                          ...fieldConfig.options,
+                        ]),
+                      );
 
                     return (
                         <div
@@ -1315,13 +1352,12 @@ function App() {
                         >
                           <div className="tag-group-label">
                             <span>{fieldConfig.label}</span>
-                            <small>{isOverridden ? "Human override" : "AI generated"}</small>
                           </div>
 
                           <div className="editable-tag-content">
                             <div className="tag-chip-list">
                               {fieldConfig.currentValues.map((value) => (
-                                <em
+                                <button
                                   className={`tag-chip ${
                                     isOverridden
                                       ? "tag-edited"
@@ -1334,12 +1370,15 @@ function App() {
                                             : "tag-neutral"
                                   }`}
                                   key={`${fieldConfig.field}-${value}`}
+                                  type="button"
+                                  disabled={tagOverrideSaveState !== "idle"}
+                                  onClick={() => beginTagOverrideEdit(fieldConfig.field)}
                                 >
                                   {value}
                                   {isOverridden ? (
                                     <span className="tag-chip-badge">edited</span>
                                   ) : null}
-                                </em>
+                                </button>
                               ))}
                             </div>
 
@@ -1349,87 +1388,27 @@ function App() {
                               </p>
                             ) : null}
 
-                            {fieldConfig.override?.reason ? (
-                              <p className="tag-review-copy">
-                                Reason: {fieldConfig.override.reason}
-                              </p>
-                            ) : null}
-
-                            <div className="tag-edit-actions">
-                              <button
-                                className="secondary-button compact-button"
-                                type="button"
-                                disabled={
-                                  tagOverrideState === "loading" ||
-                                  tagOverrideSaveState !== "idle"
-                                }
-                                onClick={() => beginTagOverrideEdit(fieldConfig.field)}
-                              >
-                                {isOverridden ? "Edit override" : "Edit"}
-                              </button>
-                              {isOverridden ? (
-                                <button
-                                  className="inline-link"
-                                  type="button"
-                                  disabled={!canRevert}
-                                  onClick={() =>
-                                    fieldConfig.override
-                                      ? void handleDeleteTagOverride(fieldConfig.override)
-                                      : undefined
-                                  }
-                                >
-                                  Revert
-                                </button>
-                              ) : null}
-                            </div>
-
                             {isEditing ? (
                               <form
-                                className="override-form inline-override-form"
+                                className="inline-tag-editor"
                                 onSubmit={handleTagOverrideSubmit}
                               >
-                                <div className="section-heading compact">
-                                  <h4>{isOverridden ? "Edit override" : "Add override"}</h4>
-                                  <span>{fieldConfig.label}</span>
-                                </div>
-                                <div className="override-form-grid">
-                                  <label className="override-value-field">
-                                    <span>
-                                      Override value
-                                      {fieldConfig.kind === "list"
-                                        ? " (comma separated)"
-                                        : ""}
-                                    </span>
-                                    <input
-                                      value={tagOverrideValue}
-                                      onChange={(event) =>
-                                        setTagOverrideValue(event.target.value)
-                                      }
-                                      placeholder={generatedCopy}
-                                    />
-                                  </label>
-                                  <label>
-                                    <span>Reason</span>
-                                    <input
-                                      value={tagOverrideReason}
-                                      onChange={(event) =>
-                                        setTagOverrideReason(event.target.value)
-                                      }
-                                      placeholder="Reviewer correction"
-                                    />
-                                  </label>
-                                  <label>
-                                    <span>Reviewer</span>
-                                    <input
-                                      value={tagOverrideCreatedBy}
-                                      onChange={(event) =>
-                                        setTagOverrideCreatedBy(event.target.value)
-                                      }
-                                      placeholder="ops@example.com"
-                                    />
-                                  </label>
-                                </div>
-                                <div className="override-actions">
+                                <label>
+                                  <span>Replace with</span>
+                                  <select
+                                    value={tagOverrideValue}
+                                    onChange={(event) =>
+                                      setTagOverrideValue(event.target.value)
+                                    }
+                                  >
+                                    {selectOptions.map((option) => (
+                                      <option value={option} key={option}>
+                                        {option}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                                <div className="tag-editor-actions">
                                   <button
                                     className="primary-button"
                                     type="submit"
@@ -1451,11 +1430,24 @@ function App() {
                                     onClick={() => {
                                       setEditingTagField(null);
                                       setTagOverrideValue("");
-                                      setTagOverrideReason("");
                                     }}
                                   >
                                     Cancel
                                   </button>
+                                  {isOverridden ? (
+                                    <button
+                                      className="inline-link"
+                                      type="button"
+                                      disabled={!canRevert}
+                                      onClick={() =>
+                                        fieldConfig.override
+                                          ? void handleDeleteTagOverride(fieldConfig.override)
+                                          : undefined
+                                      }
+                                    >
+                                      Revert
+                                    </button>
+                                  ) : null}
                                 </div>
                               </form>
                             ) : null}
