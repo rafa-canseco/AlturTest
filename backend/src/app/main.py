@@ -1,9 +1,10 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.calls.repository import CallRepository, CallRepositoryError, PostgresCallRepository
 from app.calls.routes import router as calls_router
 from app.calls.service import CallService
-from app.calls.storage import CallStorage, CallStorageError, LocalCallStorage
+from app.calls.storage import CallStorage, CallStorageError, LocalCallStorage, S3CallStorage
 from app.config import Settings, get_settings
 
 
@@ -15,6 +16,15 @@ def create_app(
 ) -> FastAPI:
     resolved_settings = settings or get_settings()
     app = FastAPI(title=resolved_settings.app_name, debug=resolved_settings.debug)
+    cors_origins = _parse_csv(resolved_settings.cors_allow_origins)
+    if cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+            allow_headers=["*"],
+        )
     app.state.call_service = CallService(
         repository=call_repository or _build_call_repository(resolved_settings),
         storage=call_storage or _build_call_storage(resolved_settings),
@@ -38,7 +48,23 @@ def _build_call_repository(settings: Settings) -> CallRepository:
 
 
 def _build_call_storage(settings: Settings) -> CallStorage:
+    if (
+        settings.s3_endpoint_url
+        and settings.s3_access_key_id
+        and settings.s3_secret_access_key
+    ):
+        return S3CallStorage(
+            endpoint_url=settings.s3_endpoint_url,
+            access_key_id=settings.s3_access_key_id,
+            secret_access_key=settings.s3_secret_access_key,
+            region=settings.s3_region,
+            url_style=settings.s3_url_style,
+        )
     return LocalCallStorage(settings.local_storage_root)
+
+
+def _parse_csv(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 class _UnconfiguredCallRepository:

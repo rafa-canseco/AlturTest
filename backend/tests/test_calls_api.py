@@ -20,9 +20,9 @@ from app.calls.models import (
     TagOverrideRecord,
 )
 from app.calls.repository import CallRepositoryError, PostgresCallRepository
-from app.calls.storage import CallStorageError, LocalCallStorage
+from app.calls.storage import CallStorageError, LocalCallStorage, S3CallStorage
 from app.config import Settings
-from app.main import create_app
+from app.main import _build_call_storage, create_app
 
 
 def test_create_call_uploads_audio_and_queues_job() -> None:
@@ -55,6 +55,41 @@ def test_create_call_uploads_audio_and_queues_job() -> None:
     assert repository.created_calls[0].status == "queued"
     assert repository.created_jobs == [call_id]
     assert repository.idempotency_queries == []
+
+
+def test_cors_allows_configured_frontend_origin() -> None:
+    app = create_app(
+        Settings(app_env="test", cors_allow_origins="https://altur-demo.vercel.app"),
+        call_repository=FakeCallRepository(),
+        call_storage=FakeCallStorage(),
+    )
+    client = TestClient(app)
+
+    response = client.options(
+        "/calls",
+        headers={
+            "Origin": "https://altur-demo.vercel.app",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == (
+        "https://altur-demo.vercel.app"
+    )
+
+
+def test_build_call_storage_uses_s3_when_configured() -> None:
+    storage = _build_call_storage(
+        Settings(
+            app_env="test",
+            s3_endpoint_url="https://s3.example.test",
+            s3_access_key_id="access-key",
+            s3_secret_access_key="secret-key",
+        )
+    )
+
+    assert isinstance(storage, S3CallStorage)
 
 
 def test_create_call_without_idempotency_key_preserves_legacy_behavior() -> None:
