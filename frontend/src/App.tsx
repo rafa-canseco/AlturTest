@@ -100,10 +100,26 @@ const TAG_OVERRIDE_FIELDS: Array<{
   { field: "risk_flags", label: "Risk flags", kind: "list" },
 ];
 
+const INSIGHT_CATEGORIES = [
+  { key: "objections", label: "Objections", tone: "standard" },
+  { key: "commitments", label: "Commitments", tone: "standard" },
+  { key: "follow_up_hints", label: "Follow-up hints", tone: "standard" },
+  { key: "customer_questions", label: "Customer questions", tone: "standard" },
+  { key: "agent_action_items", label: "Agent action items", tone: "standard" },
+  { key: "escalation_notes", label: "Escalation notes", tone: "alert" },
+] as const;
+
 type TagCategory = {
   key: (typeof TAG_CATEGORIES)[number]["key"];
   label: string;
   values: string[];
+};
+
+type InsightCategory = {
+  key: (typeof INSIGHT_CATEGORIES)[number]["key"];
+  label: string;
+  values: string[];
+  tone: (typeof INSIGHT_CATEGORIES)[number]["tone"];
 };
 
 type AnalysisView = {
@@ -112,6 +128,7 @@ type AnalysisView = {
   sentiment?: string;
   nextAction?: string;
   tags: TagCategory[];
+  insights: InsightCategory[];
   raw?: unknown;
 };
 
@@ -382,7 +399,9 @@ const formatDate = (value?: string) => {
 
 const buildAnalysisView = (analysis: unknown): AnalysisView | null => {
   if (typeof analysis === "string") {
-    return analysis.trim() ? { summary: analysis.trim(), tags: [] } : null;
+    return analysis.trim()
+      ? { summary: analysis.trim(), tags: [], insights: [] }
+      : null;
   }
 
   const record = toRecord(analysis);
@@ -398,6 +417,14 @@ const buildAnalysisView = (analysis: unknown): AnalysisView | null => {
     key,
     label,
     values: toStringList(tagRecord[key]),
+  })).filter((category) => category.values.length > 0);
+
+  const insightRecord = toRecord(record.insights) ?? record;
+  const insights = INSIGHT_CATEGORIES.map(({ key, label, tone }) => ({
+    key,
+    label,
+    tone,
+    values: toStringList(insightRecord[key]),
   })).filter((category) => category.values.length > 0);
 
   return {
@@ -429,6 +456,7 @@ const buildAnalysisView = (analysis: unknown): AnalysisView | null => {
       "followUp",
     ]),
     tags,
+    insights,
     raw: analysis,
   };
 };
@@ -1266,6 +1294,37 @@ function App() {
                     {analysisFailed
                       ? "Summary was not generated for this call."
                       : "Summary will appear after analysis completes."}
+                  </p>
+                )}
+              </section>
+
+              <section className="detail-section insights-section">
+                <div className="section-heading">
+                  <h3>Conversation insights</h3>
+                  <span>{analysisView?.insights.length ?? 0}</span>
+                </div>
+                {analysisView?.insights.length ? (
+                  <div className="insight-grid">
+                    {analysisView.insights.map((category) => (
+                      <article
+                        className="insight-card"
+                        data-tone={category.tone}
+                        key={category.key}
+                      >
+                        <h4>{category.label}</h4>
+                        <ul>
+                          {category.values.map((value) => (
+                            <li key={value}>{value}</li>
+                          ))}
+                        </ul>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="empty-copy">
+                    {detailState === "loading" && !selectedCall?.analysis
+                      ? "Loading conversation insights."
+                      : "No structured conversation insights yet."}
                   </p>
                 )}
               </section>
