@@ -611,27 +611,25 @@ const parseOverrideValue = (value: string, kind: "text" | "list") => {
   return value.trim();
 };
 
-const renderTagGroups = (tags: TagCategory[]) => {
-  if (tags.length === 0) {
-    return <p className="empty-copy">No tags have been generated yet.</p>;
+const valueToList = (value: unknown): string[] => {
+  const list = toStringList(value);
+  if (list.length > 0) return list;
+  if (typeof value === "string" && value.trim()) return [value.trim()];
+  if (typeof value === "number" || typeof value === "boolean") {
+    return [String(value)];
   }
+  return [];
+};
 
-  return (
-    <div className="tag-groups">
-      {tags.map((category) => (
-        <div className="tag-group" key={category.key}>
-          <span>{category.label}</span>
-          <div className="tag-chip-list">
-            {category.values.map((value) => (
-              <em className={`tag-chip tag-${category.key}`} key={value}>
-                {value}
-              </em>
-            ))}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
+const valuesToInput = (values: string[]) => values.join(", ");
+
+const generatedValuesForField = (
+  analysis: unknown,
+  field: TagOverrideField,
+): string[] => {
+  const value = getGeneratedFieldValue(analysis, field);
+  const values = valueToList(value);
+  return values.length > 0 ? values : ["Not available"];
 };
 
 function App() {
@@ -652,6 +650,8 @@ function App() {
     useState<SaveState>("idle");
   const [tagOverrideField, setTagOverrideField] =
     useState<TagOverrideField>("customer_intent");
+  const [editingTagField, setEditingTagField] =
+    useState<TagOverrideField | null>(null);
   const [tagOverrideValue, setTagOverrideValue] = useState("");
   const [tagOverrideReason, setTagOverrideReason] = useState("");
   const [tagOverrideCreatedBy, setTagOverrideCreatedBy] = useState("");
@@ -758,6 +758,7 @@ function App() {
     setIsTranscriptExpanded(false);
     setIsSummaryExpanded(false);
     setIsAuditExpanded(false);
+    setEditingTagField(null);
     void loadCallDetail(selectedCallId);
     void loadTagOverrides(selectedCallId);
   }, [loadCallDetail, loadTagOverrides, selectedCallId]);
@@ -883,6 +884,7 @@ function App() {
 
       setTagOverrideValue("");
       setTagOverrideReason("");
+      setEditingTagField(null);
       setNotice("Tag override saved.");
       await loadTagOverrides(selectedCallId);
     } catch (error) {
@@ -914,6 +916,11 @@ function App() {
       }
 
       setNotice("Tag override removed.");
+      if (editingTagField === override.field) {
+        setEditingTagField(null);
+        setTagOverrideValue("");
+        setTagOverrideReason("");
+      }
       await loadTagOverrides(selectedCallId);
     } catch (error) {
       setNotice(
@@ -942,10 +949,52 @@ function App() {
   const summaryCanExpand = shouldCollapseText(analysisView?.summary, 280);
   const auditCanExpand = shouldCollapseAudit(selectedCall?.events);
   const activeTagOverrides = activeOverridesByField(tagOverrides);
-  const selectedTagFieldConfig = TAG_OVERRIDE_FIELDS.find(
-    (item) => item.field === tagOverrideField,
+  const editableTagFields = TAG_OVERRIDE_FIELDS.map((fieldConfig) => {
+    const override = activeTagOverrides[fieldConfig.field];
+    const generatedValues = generatedValuesForField(
+      selectedCall?.analysis,
+      fieldConfig.field,
+    );
+    const currentValues = override
+      ? valueToList(override.overrideValue)
+      : generatedValues;
+    return {
+      ...fieldConfig,
+      override,
+      generatedValues,
+      currentValues: currentValues.length > 0 ? currentValues : ["Not available"],
+    };
+  });
+  const staticTagGroups = (analysisView?.tags ?? []).filter(
+    (category) =>
+      category.key !== "customer_intents" &&
+      category.key !== "risks" &&
+      category.key !== "outcomes",
   );
-  const selectedTagFieldOverride = activeTagOverrides[tagOverrideField];
+  const tagCount =
+    staticTagGroups.reduce((count, category) => count + category.values.length, 0) +
+    editableTagFields.reduce(
+      (count, field) =>
+        count +
+        field.currentValues.filter((value) => value !== "Not available").length,
+      0,
+    );
+
+  const beginTagOverrideEdit = (field: TagOverrideField) => {
+    const override = activeTagOverrides[field];
+    const generatedValues = generatedValuesForField(selectedCall?.analysis, field);
+
+    setEditingTagField(field);
+    setTagOverrideField(field);
+    setTagOverrideValue(
+      override
+        ? formatValue(override.overrideValue)
+        : valuesToInput(
+            generatedValues.filter((value) => value !== "Not available"),
+          ),
+    );
+    setTagOverrideReason(override?.reason ?? "");
+  };
 
   return (
     <main className="app-shell" data-api-base-url={config.apiBaseUrl}>
@@ -1223,184 +1272,199 @@ function App() {
 
               <section className="detail-section tag-section">
                 <div className="section-heading">
-                  <h3>Generated tags</h3>
-                  <span>{analysisView?.tags.length ?? 0}</span>
-                </div>
-                {renderTagGroups(analysisView?.tags ?? [])}
-              </section>
-
-              <section className="detail-section override-section">
-                <div className="section-heading">
-                  <h3>Tag review</h3>
+                  <h3>Tags</h3>
                   <span>
                     {tagOverrideState === "loading"
                       ? "Loading"
-                      : `${tagOverrides.length} overrides`}
+                      : `${tagCount} labels`}
                   </span>
                 </div>
 
-                <div className="override-table" role="table">
-                  <div className="override-table-head" role="row">
-                    <span role="columnheader">Field</span>
-                    <span role="columnheader">AI output</span>
-                    <span role="columnheader">User override</span>
-                  </div>
-                  {TAG_OVERRIDE_FIELDS.map(({ field, label }) => {
-                    const activeOverride = activeTagOverrides[field];
-                    return (
-                      <div className="override-row" role="row" key={field}>
-                        <div role="cell">
-                          <strong>{label}</strong>
+                {!analysisReady ? (
+                  <p className="empty-copy">No tags have been generated yet.</p>
+                ) : (
+                  <div className="tag-groups">
+                    {staticTagGroups.map((category) => (
+                      <div className="tag-group" key={category.key}>
+                        <div className="tag-group-label">
+                          <span>{category.label}</span>
+                          <small>AI generated</small>
                         </div>
-                        <div role="cell">
-                          <span className="source-pill source-ai">AI</span>
-                          <p>{formatValue(getGeneratedFieldValue(selectedCall?.analysis, field))}</p>
-                        </div>
-                        <div role="cell">
-                          <span
-                            className={`source-pill ${
-                              activeOverride ? "source-user" : "source-empty"
-                            }`}
-                          >
-                            {activeOverride ? "Override" : "No override"}
-                          </span>
-                          <p>
-                            {activeOverride
-                              ? formatValue(activeOverride.overrideValue)
-                              : "Using AI output"}
-                          </p>
-                          {activeOverride?.reason ? (
-                            <small>{activeOverride.reason}</small>
-                          ) : null}
-                          {activeOverride ? (
-                            <button
-                              className="inline-link"
-                              type="button"
-                              disabled={tagOverrideSaveState !== "idle"}
-                              onClick={() => void handleDeleteTagOverride(activeOverride)}
-                            >
-                              Revert
-                            </button>
-                          ) : null}
+                        <div className="tag-chip-list">
+                          {category.values.map((value) => (
+                            <em className={`tag-chip tag-${category.key}`} key={value}>
+                              {value}
+                            </em>
+                          ))}
                         </div>
                       </div>
-                    );
-                  })}
-                </div>
+                    ))}
 
-                <form className="override-form" onSubmit={handleTagOverrideSubmit}>
-                  <div className="section-heading compact">
-                    <h4>Add or edit override</h4>
-                    <span>{selectedTagFieldOverride ? "Editing" : "New"}</span>
-                  </div>
-                  <div className="override-form-grid">
-                    <label>
-                      <span>Field</span>
-                      <select
-                        value={tagOverrideField}
-                        onChange={(event) => {
-                          const nextField = event.target.value as TagOverrideField;
-                          const nextOverride = activeTagOverrides[nextField];
-                          setTagOverrideField(nextField);
-                          setTagOverrideValue(
-                            nextOverride
-                              ? formatValue(nextOverride.overrideValue)
-                              : "",
-                          );
-                          setTagOverrideReason(nextOverride?.reason ?? "");
-                        }}
-                      >
-                        {TAG_OVERRIDE_FIELDS.map(({ field, label }) => (
-                          <option value={field} key={field}>
-                            {label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label>
-                      <span>
-                        Override value
-                        {selectedTagFieldConfig?.kind === "list"
-                          ? " (comma separated)"
-                          : ""}
-                      </span>
-                      <input
-                        value={tagOverrideValue}
-                        onChange={(event) => setTagOverrideValue(event.target.value)}
-                        placeholder={
-                          selectedTagFieldOverride
-                            ? formatValue(selectedTagFieldOverride.overrideValue)
-                            : formatValue(
-                                getGeneratedFieldValue(
-                                  selectedCall?.analysis,
-                                  tagOverrideField,
-                                ),
-                              )
-                        }
-                      />
-                    </label>
-                    <label>
-                      <span>Reason</span>
-                      <input
-                        value={tagOverrideReason}
-                        onChange={(event) => setTagOverrideReason(event.target.value)}
-                        placeholder="Reviewer correction"
-                      />
-                    </label>
-                    <label>
-                      <span>Reviewer</span>
-                      <input
-                        value={tagOverrideCreatedBy}
-                        onChange={(event) =>
-                          setTagOverrideCreatedBy(event.target.value)
-                        }
-                        placeholder="ops@example.com"
-                      />
-                    </label>
-                  </div>
-                  <div className="override-actions">
-                    <button
-                      className="primary-button"
-                      type="submit"
-                      disabled={
-                        tagOverrideSaveState !== "idle" ||
-                        !analysisReady ||
-                        tagOverrideState === "loading"
-                      }
-                      data-loading={tagOverrideSaveState === "saving"}
-                    >
-                      {tagOverrideSaveState === "saving"
-                        ? "Saving"
-                        : "Save override"}
-                    </button>
-                    <p>
-                      {analysisReady
-                        ? "Overrides do not hide the model output."
-                        : "Analysis must finish before tags can be edited."}
-                    </p>
-                  </div>
-                </form>
-              </section>
+                    {editableTagFields.map((fieldConfig) => {
+                      const isEditing = editingTagField === fieldConfig.field;
+                      const isOverridden = Boolean(fieldConfig.override);
+                      const generatedCopy = fieldConfig.generatedValues.join(", ");
+                      const canRevert =
+                        isOverridden && tagOverrideSaveState === "idle";
 
-              <section className="detail-section">
-                <div className="section-heading">
-                  <h3>Intent, sentiment, next action</h3>
-                  <span>{analysisReady ? "Ready" : "Pending"}</span>
-                </div>
-                <dl className="ops-grid">
-                  <div>
-                    <dt>Intent</dt>
-                    <dd>{analysisView?.intent ?? "Not available"}</dd>
+                    return (
+                        <div
+                          className="tag-group editable-tag-group"
+                          data-edited={isOverridden}
+                          key={fieldConfig.field}
+                        >
+                          <div className="tag-group-label">
+                            <span>{fieldConfig.label}</span>
+                            <small>{isOverridden ? "Human override" : "AI generated"}</small>
+                          </div>
+
+                          <div className="editable-tag-content">
+                            <div className="tag-chip-list">
+                              {fieldConfig.currentValues.map((value) => (
+                                <em
+                                  className={`tag-chip ${
+                                    isOverridden
+                                      ? "tag-edited"
+                                      : fieldConfig.field === "risk_flags"
+                                        ? "tag-risks"
+                                        : fieldConfig.field === "call_outcome"
+                                          ? "tag-outcomes"
+                                          : fieldConfig.field === "customer_intent"
+                                            ? "tag-customer_intents"
+                                            : "tag-neutral"
+                                  }`}
+                                  key={`${fieldConfig.field}-${value}`}
+                                >
+                                  {value}
+                                  {isOverridden ? (
+                                    <span className="tag-chip-badge">edited</span>
+                                  ) : null}
+                                </em>
+                              ))}
+                            </div>
+
+                            {isOverridden ? (
+                              <p className="tag-original-copy">
+                                AI suggested: {generatedCopy}
+                              </p>
+                            ) : null}
+
+                            {fieldConfig.override?.reason ? (
+                              <p className="tag-review-copy">
+                                Reason: {fieldConfig.override.reason}
+                              </p>
+                            ) : null}
+
+                            <div className="tag-edit-actions">
+                              <button
+                                className="secondary-button compact-button"
+                                type="button"
+                                disabled={
+                                  tagOverrideState === "loading" ||
+                                  tagOverrideSaveState !== "idle"
+                                }
+                                onClick={() => beginTagOverrideEdit(fieldConfig.field)}
+                              >
+                                {isOverridden ? "Edit override" : "Edit"}
+                              </button>
+                              {isOverridden ? (
+                                <button
+                                  className="inline-link"
+                                  type="button"
+                                  disabled={!canRevert}
+                                  onClick={() =>
+                                    fieldConfig.override
+                                      ? void handleDeleteTagOverride(fieldConfig.override)
+                                      : undefined
+                                  }
+                                >
+                                  Revert
+                                </button>
+                              ) : null}
+                            </div>
+
+                            {isEditing ? (
+                              <form
+                                className="override-form inline-override-form"
+                                onSubmit={handleTagOverrideSubmit}
+                              >
+                                <div className="section-heading compact">
+                                  <h4>{isOverridden ? "Edit override" : "Add override"}</h4>
+                                  <span>{fieldConfig.label}</span>
+                                </div>
+                                <div className="override-form-grid">
+                                  <label className="override-value-field">
+                                    <span>
+                                      Override value
+                                      {fieldConfig.kind === "list"
+                                        ? " (comma separated)"
+                                        : ""}
+                                    </span>
+                                    <input
+                                      value={tagOverrideValue}
+                                      onChange={(event) =>
+                                        setTagOverrideValue(event.target.value)
+                                      }
+                                      placeholder={generatedCopy}
+                                    />
+                                  </label>
+                                  <label>
+                                    <span>Reason</span>
+                                    <input
+                                      value={tagOverrideReason}
+                                      onChange={(event) =>
+                                        setTagOverrideReason(event.target.value)
+                                      }
+                                      placeholder="Reviewer correction"
+                                    />
+                                  </label>
+                                  <label>
+                                    <span>Reviewer</span>
+                                    <input
+                                      value={tagOverrideCreatedBy}
+                                      onChange={(event) =>
+                                        setTagOverrideCreatedBy(event.target.value)
+                                      }
+                                      placeholder="ops@example.com"
+                                    />
+                                  </label>
+                                </div>
+                                <div className="override-actions">
+                                  <button
+                                    className="primary-button"
+                                    type="submit"
+                                    disabled={
+                                      tagOverrideSaveState !== "idle" ||
+                                      !analysisReady ||
+                                      tagOverrideState === "loading"
+                                    }
+                                    data-loading={tagOverrideSaveState === "saving"}
+                                  >
+                                    {tagOverrideSaveState === "saving"
+                                      ? "Saving"
+                                      : "Save"}
+                                  </button>
+                                  <button
+                                    className="secondary-button compact-button"
+                                    type="button"
+                                    disabled={tagOverrideSaveState !== "idle"}
+                                    onClick={() => {
+                                      setEditingTagField(null);
+                                      setTagOverrideValue("");
+                                      setTagOverrideReason("");
+                                    }}
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </form>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
-                  <div>
-                    <dt>Sentiment</dt>
-                    <dd>{analysisView?.sentiment ?? "Not available"}</dd>
-                  </div>
-                  <div>
-                    <dt>Next action</dt>
-                    <dd>{analysisView?.nextAction ?? "Not available"}</dd>
-                  </div>
-                </dl>
+                )}
               </section>
 
               {analysisView?.raw &&
