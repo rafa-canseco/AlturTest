@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 from app.calls.models import (
     CallAnalysisCreate,
+    CallProviderAttemptCreate,
     CallProcessingJobRecord,
     CallRecord,
     CallTranscriptRecord,
@@ -150,6 +151,28 @@ def test_transcription_processor_success_persists_transcript_and_keeps_call_proc
             "stt_model": "scribe_v1",
             "transcript_metadata": {"language_code": "en"},
         }
+    ]
+    assert repository.created_provider_attempts == [
+        CallProviderAttemptCreate(
+            call_id=claimed_job.call.id,
+            job_id=claimed_job.job.id,
+            stage="stt",
+            provider="elevenlabs",
+            model="scribe_v1",
+            status="valid",
+            metadata={
+                "filename": claimed_job.call.original_filename,
+                "content_type": claimed_job.call.content_type,
+                "file_size_bytes": claimed_job.call.file_size_bytes,
+            },
+            raw_provider_response=None,
+            raw_content=None,
+            parsed_output={
+                "text": "Customer wants a demo.",
+                "metadata": {"language_code": "en"},
+            },
+            error_message=None,
+        )
     ]
     assert repository.completed_jobs == []
     assert repository.analysis_ready_jobs == [(claimed_job.job.id, claimed_job.call.id)]
@@ -301,6 +324,21 @@ def test_analysis_processor_success_persists_analysis_and_completes_job() -> Non
             raw_llm_output={"summary": "Customer asked for pricing."},
         )
     ]
+    assert repository.created_provider_attempts == [
+        CallProviderAttemptCreate(
+            call_id=claimed_job.call.id,
+            job_id=claimed_job.job.id,
+            stage="analysis",
+            provider="fake-llm",
+            model="fake-analysis-model",
+            status="valid",
+            metadata={"prompt_version": "test-prompt"},
+            raw_provider_response=None,
+            raw_content=None,
+            parsed_output={"summary": "Customer asked for pricing."},
+            error_message=None,
+        )
+    ]
     assert repository.completed_jobs == [(claimed_job.job.id, claimed_job.call.id)]
     assert repository.failed_jobs == []
 
@@ -411,6 +449,53 @@ def test_analysis_processor_invalid_output_does_not_persist_partial_analysis() -
             claimed_job.call.id,
             "analysis_failed",
             "Transcript analysis failed",
+        )
+    ]
+
+
+def test_analysis_processor_invalid_output_persists_raw_provider_attempt() -> None:
+    claimed_job = _claimed_job(transcript_exists=True)
+    repository = FakeWorkerRepository(
+        claimed_job=claimed_job,
+        transcript=_transcript_record(call_id=claimed_job.call.id),
+    )
+    invalid_output = InvalidLLMOutputError(
+        "Transcript analysis sentiment is invalid",
+        provider="openai",
+        model="gpt-test",
+        prompt_version="test-prompt",
+        raw_provider_response={"choices": [{"message": {"content": "{\"sentiment\":\"happy\"}"}}]},
+        raw_content='{"sentiment":"happy"}',
+        parsed_output={"sentiment": "happy"},
+    )
+    service = WorkerService(
+        repository=repository,
+        processor=AnalysisProcessor(
+            repository=repository,
+            llm_client=FakeLLMClient(error=invalid_output),
+        ),
+        claim_transcript_exists=True,
+    )
+
+    did_work = service.run_once(worker_id="worker-a")
+
+    assert did_work is True
+    assert repository.created_analyses == []
+    assert repository.created_provider_attempts == [
+        CallProviderAttemptCreate(
+            call_id=claimed_job.call.id,
+            job_id=claimed_job.job.id,
+            stage="analysis",
+            provider="openai",
+            model="gpt-test",
+            status="invalid",
+            metadata={"prompt_version": "test-prompt"},
+            raw_provider_response={
+                "choices": [{"message": {"content": "{\"sentiment\":\"happy\"}"}}]
+            },
+            raw_content='{"sentiment":"happy"}',
+            parsed_output={"sentiment": "happy"},
+            error_message="Transcript analysis sentiment is invalid",
         )
     ]
 
@@ -568,6 +653,18 @@ def test_postgres_worker_repository_persists_analysis_idempotently() -> None:
     assert "analysis.succeeded" in constants
 
 
+def test_postgres_worker_repository_persists_provider_attempts() -> None:
+    constants = "\n".join(
+        str(constant).lower()
+        for constant in PostgresWorkerRepository.create_provider_attempt.__code__.co_consts
+    )
+
+    assert "insert into call_provider_attempts" in constants
+    assert "raw_provider_response" in constants
+    assert "parsed_output" in constants
+    assert "error_message" in constants
+
+
 def test_postgres_worker_repository_records_transcription_events_without_transcript_text() -> None:
     constants = "\n".join(
         str(constant).lower()
@@ -618,6 +715,7 @@ class FakeWorkerRepository:
         self.failed_jobs: list[tuple[UUID, UUID, str, str]] = []
         self.created_transcripts: list[dict[str, object]] = []
         self.created_analyses: list[CallAnalysisCreate] = []
+        self.created_provider_attempts: list[CallProviderAttemptCreate] = []
 
     def claim_next_job(
         self,
@@ -680,6 +778,10 @@ class FakeWorkerRepository:
 
     def has_analysis(self, *, call_id: UUID) -> bool:
         return self.existing_analysis
+
+    def create_provider_attempt(self, *, attempt: CallProviderAttemptCreate) -> bool:
+        self.created_provider_attempts.append(attempt)
+        return True
 
     def create_analysis(self, *, analysis: CallAnalysisCreate) -> bool:
         if self.existing_analysis:

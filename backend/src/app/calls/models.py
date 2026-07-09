@@ -145,3 +145,18 @@ class CallAnalysisCreate:
     llm_model: str
     prompt_version: str
     raw_llm_output: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class CallProviderAttemptCreate:
+    call_id: UUID
+    job_id: UUID
+    stage: str
+    provider: str
+    model: str | None
+    status: str
+    metadata: dict[str, Any]
+    raw_provider_response: dict[str, Any] | None
+    raw_content: str | None
+    parsed_output: dict[str, Any] | None
+    error_message: str | None

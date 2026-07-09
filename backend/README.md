@@ -122,6 +122,9 @@ Schema decisions:
   worker preserve transcript value when STT succeeds but LLM analysis fails.
 - `call_analysis` stores one validated LLM result per call, including
   prompt/model metadata and the raw structured LLM payload for debugging.
+- `call_provider_attempts` stores internal raw provider responses for STT and
+  LLM attempts before final validation. This is for backend/operator debugging
+  only and must not be exposed through `GET /calls/{call_id}`.
 - `tag_overrides` stores human corrections separately from model output.
 - `processing_events` is intentionally lightweight and only for status or
   retry/debug events.
@@ -202,7 +205,9 @@ ANALYSIS_PROMPT_VERSION=altur-analysis-v1
 
 `OPENAI_API_KEY` must be provided by the runtime environment. Analysis output is
 validated against the `call_analysis` schema before persistence; malformed model
-output fails the job with `analysis_failed` and preserves the transcript.
+output fails the job with `analysis_failed` and preserves the transcript. Raw
+provider responses for both successful and invalid analysis attempts are stored
+internally in `call_provider_attempts`.
 
 Tests must not require live Supabase. Future repository and storage code should
 be written behind interfaces and covered with fakes or mocks by default.
