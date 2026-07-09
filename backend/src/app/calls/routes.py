@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from hashlib import sha256
 from uuid import UUID
 
 from fastapi import APIRouter, File, Header, HTTPException, Query, Request, UploadFile, status
@@ -15,6 +16,7 @@ from app.calls.schemas import (
     CallAnalysisResponse,
     CallDetailResponse,
     CallListResponse,
+    CallProcessingJobDiagnosticsResponse,
     ProcessingEventResponse,
     CallSummaryResponse,
     CallTranscriptResponse,
@@ -129,6 +131,7 @@ def _detail_response(detail: CallDetailRecord) -> CallDetailResponse:
             _transcript_response(detail.transcript) if detail.transcript is not None else None
         ),
         analysis=_analysis_response(detail.analysis) if detail.analysis is not None else None,
+        processing_job=_processing_job_response(detail),
         events=[_processing_event_response(event) for event in detail.events or []],
     )
 
@@ -171,3 +174,46 @@ def _processing_event_response(event: ProcessingEventRecord) -> ProcessingEventR
         metadata=event.metadata,
         created_at=event.created_at,
     )
+
+
+def _processing_job_response(
+    detail: CallDetailRecord,
+) -> CallProcessingJobDiagnosticsResponse | None:
+    job = detail.job
+    if job is None:
+        return None
+    return CallProcessingJobDiagnosticsResponse(
+        status=job.status,
+        stage=_processing_stage(detail),
+        attempt_count=job.attempt_count,
+        max_attempts=job.max_attempts,
+        available_at=job.available_at,
+        locked_at=job.locked_at,
+        locked_by=_safe_locked_by(job.locked_by),
+        started_at=job.started_at,
+        completed_at=job.completed_at,
+        failed_at=job.failed_at,
+        last_error_code=job.last_error_code,
+        last_error_message=job.last_error_message,
+    )
+
+
+def _processing_stage(detail: CallDetailRecord) -> str:
+    call = detail.call
+    job = detail.job
+    if call.status == "completed" or job is not None and job.status == "completed":
+        return "completed"
+    if call.status == "failed" or job is not None and job.status == "failed":
+        return "failed"
+    if detail.analysis is not None:
+        return "completed"
+    if detail.transcript is not None:
+        return "analysis"
+    return "transcription"
+
+
+def _safe_locked_by(locked_by: str | None) -> str | None:
+    if locked_by is None:
+        return None
+    digest = sha256(locked_by.encode("utf-8")).hexdigest()[:12]
+    return f"worker-{digest}"

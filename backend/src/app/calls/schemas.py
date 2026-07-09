@@ -51,6 +51,21 @@ class ProcessingEventResponse(BaseModel):
     created_at: datetime
 
 
+class CallProcessingJobDiagnosticsResponse(BaseModel):
+    status: str
+    stage: str
+    attempt_count: int
+    max_attempts: int
+    available_at: datetime
+    locked_at: datetime | None = None
+    locked_by: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    failed_at: datetime | None = None
+    last_error_code: str | None = None
+    last_error_message: str | None = None
+
+
 class CallDetailResponse(CallSummaryResponse):
     storage_bucket: str
     storage_path: str
@@ -62,6 +77,7 @@ class CallDetailResponse(CallSummaryResponse):
     updated_at: datetime
     transcript: CallTranscriptResponse | None = None
     analysis: CallAnalysisResponse | None = None
+    processing_job: CallProcessingJobDiagnosticsResponse | None = None
     events: list[ProcessingEventResponse] = Field(default_factory=list)
 
 
