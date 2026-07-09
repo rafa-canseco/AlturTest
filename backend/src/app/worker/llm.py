@@ -17,6 +17,71 @@ ALLOWED_NEXT_ACTIONS = {
     "none",
 }
 DEFAULT_ANALYSIS_PROMPT_VERSION = "altur-analysis-v1"
+ANALYSIS_RESPONSE_SCHEMA: dict[str, Any] = {
+    "name": "call_analysis",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "summary": {
+                "type": "string",
+                "description": "Concise aggregate summary of the full transcript.",
+            },
+            "tags": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "topics": {"type": "array", "items": {"type": "string"}},
+                    "customer_intents": {"type": "array", "items": {"type": "string"}},
+                    "products": {"type": "array", "items": {"type": "string"}},
+                    "risks": {"type": "array", "items": {"type": "string"}},
+                    "outcomes": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": [
+                    "topics",
+                    "customer_intents",
+                    "products",
+                    "risks",
+                    "outcomes",
+                ],
+                "description": "Operational tags grouped into fixed categories.",
+            },
+            "intent": {
+                "type": ["string", "null"],
+                "description": "Single dominant customer intent for the full transcript.",
+            },
+            "sentiment": {
+                "type": ["string", "null"],
+                "enum": ["positive", "neutral", "negative", "mixed", None],
+            },
+            "next_action": {
+                "type": ["string", "null"],
+                "enum": [
+                    "send_info",
+                    "schedule_demo",
+                    "follow_up",
+                    "escalate",
+                    "close_lost",
+                    "none",
+                    None,
+                ],
+            },
+            "risk_flags": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+        },
+        "required": [
+            "summary",
+            "tags",
+            "intent",
+            "sentiment",
+            "next_action",
+            "risk_flags",
+        ],
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -184,17 +249,21 @@ class OpenAIAnalysisClient:
         return {
             "model": self._model,
             "temperature": 0,
-            "response_format": {"type": "json_object"},
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": ANALYSIS_RESPONSE_SCHEMA,
+            },
             "messages": [
                 {
                     "role": "system",
                     "content": (
-                        "Analyze the sales call transcript. Return only JSON with keys: "
-                        "summary, tags, intent, sentiment, next_action, risk_flags. "
-                        "sentiment must be one of positive, neutral, negative, mixed. "
-                        "next_action must be one of send_info, schedule_demo, follow_up, "
-                        "escalate, close_lost, none. tags must be an object and "
-                        "risk_flags must be an array of strings."
+                        "Analyze the full call transcript as one aggregate customer interaction. "
+                        "If the transcript contains multiple role-play calls or segments, summarize "
+                        "the overall operational outcome and choose one dominant intent and one "
+                        "dominant next_action for the full transcript. Do not return per-call objects "
+                        "for intent, sentiment, or next_action. Use the fixed tag categories from "
+                        "the schema and return empty arrays for categories that do not apply. Return "
+                        "only JSON that matches the provided schema."
                     ),
                 },
                 {"role": "user", "content": transcript},
@@ -273,9 +342,12 @@ def validate_analysis_output(
 def _optional_enum(value: object, *, allowed: set[str], field: str) -> str | None:
     if value is None:
         return None
-    if not isinstance(value, str) or value not in allowed:
+    if not isinstance(value, str):
         raise InvalidLLMOutputError(f"Transcript analysis {field} is invalid")
-    return value
+    normalized = value.strip().lower()
+    if normalized not in allowed:
+        raise InvalidLLMOutputError(f"Transcript analysis {field} is invalid")
+    return normalized
 
 
 def _read_error_body(error: HTTPError) -> str | None:

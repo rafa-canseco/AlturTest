@@ -12,7 +12,13 @@ from app.calls.models import (
     ClaimedCallProcessingJob,
 )
 from app.worker.__main__ import _build_processor, _claim_transcript_exists
-from app.worker.llm import InvalidLLMOutputError, LLMClientError, TranscriptAnalysis
+from app.worker.llm import (
+    InvalidLLMOutputError,
+    LLMClientError,
+    OpenAIAnalysisClient,
+    TranscriptAnalysis,
+    validate_analysis_output,
+)
 from app.worker.processor import (
     AnalysisProcessor,
     CallProcessorError,
@@ -498,6 +504,76 @@ def test_analysis_processor_invalid_output_persists_raw_provider_attempt() -> No
             error_message="Transcript analysis sentiment is invalid",
         )
     ]
+
+
+def test_openai_analysis_client_requests_strict_schema_output() -> None:
+    client = OpenAIAnalysisClient(api_key="fake-key", model="gpt-test")
+
+    payload = client._request_payload("Customer wants repair instructions.")
+
+    assert payload["response_format"]["type"] == "json_schema"
+    schema = payload["response_format"]["json_schema"]
+    assert schema["strict"] is True
+    assert schema["schema"]["additionalProperties"] is False
+    assert schema["schema"]["properties"]["tags"]["additionalProperties"] is False
+    assert schema["schema"]["properties"]["tags"]["required"] == [
+        "topics",
+        "customer_intents",
+        "products",
+        "risks",
+        "outcomes",
+    ]
+    assert schema["schema"]["properties"]["next_action"]["enum"] == [
+        "send_info",
+        "schedule_demo",
+        "follow_up",
+        "escalate",
+        "close_lost",
+        "none",
+        None,
+    ]
+    system_message = payload["messages"][0]["content"]
+    assert "Do not return per-call objects" in system_message
+
+
+def test_validate_analysis_output_normalizes_enum_strings() -> None:
+    analysis = validate_analysis_output(
+        raw_output={
+            "summary": "Customer received repair instructions.",
+            "tags": {"topic": ["repair"]},
+            "intent": "repair",
+            "sentiment": " Positive ",
+            "next_action": " Send_Info ",
+            "risk_flags": [],
+        },
+        provider="openai",
+        model="gpt-test",
+        prompt_version="test-prompt",
+    )
+
+    assert analysis.sentiment == "positive"
+    assert analysis.next_action == "send_info"
+
+
+def test_validate_analysis_output_rejects_per_call_next_action_object() -> None:
+    try:
+        validate_analysis_output(
+            raw_output={
+                "summary": "Two calls were analyzed.",
+                "tags": {"topic": ["support"]},
+                "intent": "customer_support",
+                "sentiment": "positive",
+                "next_action": {"call_1": "follow_up", "call_2": "send_info"},
+                "risk_flags": [],
+            },
+            provider="openai",
+            model="gpt-test",
+            prompt_version="test-prompt",
+        )
+    except InvalidLLMOutputError as exc:
+        assert str(exc) == "Transcript analysis next_action is invalid"
+    else:
+        raise AssertionError("Expected next_action object to be rejected")
 
 
 def test_default_cli_processor_fails_jobs_instead_of_completing_without_real_processor() -> None:
