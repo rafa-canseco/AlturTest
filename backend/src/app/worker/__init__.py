@@ -1,0 +1,1 @@
+"""Async call processing worker."""

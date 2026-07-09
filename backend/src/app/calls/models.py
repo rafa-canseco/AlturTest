@@ -6,6 +6,7 @@ from uuid import UUID
 
 
 CallStatus = str
+CallProcessingJobStatus = str
 
 
 @dataclass(frozen=True)
@@ -47,3 +48,28 @@ class CallRecord:
     error_code: str | None = None
     error_message: str | None = None
     failed_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class CallProcessingJobRecord:
+    id: UUID
+    call_id: UUID
+    status: CallProcessingJobStatus
+    attempt_count: int
+    max_attempts: int
+    available_at: datetime
+    created_at: datetime
+    updated_at: datetime
+    locked_at: datetime | None = None
+    locked_by: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    failed_at: datetime | None = None
+    last_error_code: str | None = None
+    last_error_message: str | None = None
+
+
+@dataclass(frozen=True)
+class ClaimedCallProcessingJob:
+    job: CallProcessingJobRecord
+    call: CallRecord
