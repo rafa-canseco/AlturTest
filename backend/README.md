@@ -146,6 +146,32 @@ Supabase Storage contract:
 - Persisted metadata: `storage_bucket`, `storage_path`, `content_type`,
   `file_size_bytes`, and optional `storage_etag`/`storage_version`.
 
+Call ingestion idempotency:
+
+- `POST /calls` accepts an optional `Idempotency-Key` header.
+- Without the header, uploads keep the legacy behavior: every valid request
+  creates a new call, queued job, and storage object.
+- With the header, the backend hashes the key before persistence and computes a
+  request fingerprint from the sanitized filename, content type, byte length,
+  and SHA-256 content hash. Raw audio is never stored in
+  `call_idempotency_keys`.
+- A retry with the same key and matching fingerprint returns the existing call
+  and does not create another queued job or storage object.
+- Reusing the same key for a different fingerprint returns `409 Conflict`.
+- The service checks the idempotency mapping before storage upload, then writes
+  the call, job, events, and idempotency mapping in one Postgres transaction.
+  If storage succeeds but DB persistence fails, the uploaded object is deleted
+  as part of the existing cleanup path.
+
+Tradeoff: this implementation avoids duplicate storage on normal completed
+retries, but it does not hold a database reservation while uploading the audio.
+That keeps uploads simple and avoids long DB locks around object storage calls.
+Two concurrent first attempts using the same key can both upload before one DB
+transaction wins the unique idempotency key insert; the loser rolls back and
+deletes its uploaded object. If stricter concurrent de-duplication becomes
+necessary, add a reservation state to `call_idempotency_keys` and carefully
+expire abandoned reservations.
+
 Required Supabase env vars:
 
 ```sh
@@ -181,8 +207,3 @@ output fails the job with `analysis_failed` and preserves the transcript.
 
 Tests must not require live Supabase. Future repository and storage code should
 be written behind interfaces and covered with fakes or mocks by default.
-
-Production improvement: call ingestion does not implement `Idempotency-Key`
-semantics yet. A retried upload request can create a new `call_id`; production
-retry safety should add an idempotency table or request-key mapping before
-clients rely on automatic upload retries.

@@ -6,11 +6,13 @@ from uuid import UUID
 
 from psycopg import connect
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 from app.calls.models import (
     CallAnalysisRecord,
     CallCreate,
     CallDetailRecord,
+    CallIdempotencyRecord,
     CallRecord,
     CallTranscriptRecord,
     ProcessingEventRecord,
@@ -22,7 +24,20 @@ class CallRepositoryError(Exception):
 
 
 class CallRepository(Protocol):
-    def create_call_with_queued_job(self, call: CallCreate) -> CallRecord:
+    def create_call_with_queued_job(
+        self,
+        call: CallCreate,
+        *,
+        idempotency_key_hash: str | None = None,
+        request_fingerprint_hash: str | None = None,
+        request_fingerprint: dict[str, object] | None = None,
+    ) -> CallRecord:
+        pass
+
+    def get_call_by_idempotency_key(
+        self,
+        idempotency_key_hash: str,
+    ) -> CallIdempotencyRecord | None:
         pass
 
     def list_calls(self, *, limit: int = 50) -> list[CallRecord]:
@@ -39,7 +54,19 @@ class PostgresCallRepository:
     def __init__(self, database_url: str) -> None:
         self._database_url = database_url
 
-    def create_call_with_queued_job(self, call: CallCreate) -> CallRecord:
+    def create_call_with_queued_job(
+        self,
+        call: CallCreate,
+        *,
+        idempotency_key_hash: str | None = None,
+        request_fingerprint_hash: str | None = None,
+        request_fingerprint: dict[str, object] | None = None,
+    ) -> CallRecord:
+        if idempotency_key_hash is not None and (
+            request_fingerprint_hash is None or request_fingerprint is None
+        ):
+            raise CallRepositoryError("Idempotent call create requires a request fingerprint")
+
         try:
             with connect(self._database_url, row_factory=dict_row) as conn:
                 with conn.transaction():
@@ -98,6 +125,30 @@ class PostgresCallRepository:
                         if job_row is None:
                             raise CallRepositoryError("Queued job insert returned no row")
 
+                        if idempotency_key_hash is not None:
+                            cur.execute(
+                                """
+                                insert into call_idempotency_keys (
+                                    idempotency_key_hash,
+                                    request_fingerprint_hash,
+                                    request_fingerprint,
+                                    call_id
+                                )
+                                values (
+                                    %(idempotency_key_hash)s,
+                                    %(request_fingerprint_hash)s,
+                                    %(request_fingerprint)s,
+                                    %(call_id)s
+                                )
+                                """,
+                                {
+                                    "idempotency_key_hash": idempotency_key_hash,
+                                    "request_fingerprint_hash": request_fingerprint_hash,
+                                    "request_fingerprint": Jsonb(request_fingerprint),
+                                    "call_id": call.id,
+                                },
+                            )
+
                         cur.execute(
                             """
                             insert into processing_events (
@@ -146,6 +197,36 @@ class PostgresCallRepository:
             raise
         except Exception as exc:
             raise CallRepositoryError("Failed to create call and queued job") from exc
+
+    def get_call_by_idempotency_key(
+        self,
+        idempotency_key_hash: str,
+    ) -> CallIdempotencyRecord | None:
+        try:
+            with connect(self._database_url, row_factory=dict_row) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        select
+                            c.*,
+                            cik.request_fingerprint_hash as idempotency_request_fingerprint_hash
+                        from call_idempotency_keys cik
+                        join calls c on c.id = cik.call_id
+                        where cik.idempotency_key_hash = %(idempotency_key_hash)s
+                        """,
+                        {"idempotency_key_hash": idempotency_key_hash},
+                    )
+                    row = cur.fetchone()
+                    if row is None:
+                        return None
+                    return CallIdempotencyRecord(
+                        call=_call_record_from_row(row),
+                        request_fingerprint_hash=str(
+                            row["idempotency_request_fingerprint_hash"]
+                        ),
+                    )
+        except Exception as exc:
+            raise CallRepositoryError("Failed to get idempotent call") from exc
 
     def list_calls(self, *, limit: int = 50) -> list[CallRecord]:
         try:

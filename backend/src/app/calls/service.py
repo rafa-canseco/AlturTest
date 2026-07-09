@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import secrets
 import logging
@@ -38,6 +40,10 @@ class CallPersistenceError(Exception):
         self.cleanup_failed = cleanup_failed
 
 
+class IdempotencyConflictError(Exception):
+    pass
+
+
 class CallService:
     def __init__(
         self,
@@ -58,6 +64,7 @@ class CallService:
         filename: str | None,
         content_type: str | None,
         content: bytes,
+        idempotency_key: str | None = None,
     ) -> CallRecord:
         validated_filename, extension = self._validate_upload(
             filename=filename,
@@ -65,6 +72,27 @@ class CallService:
             content=content,
         )
         assert content_type is not None
+        idempotency_key_hash: str | None = None
+        request_fingerprint_hash: str | None = None
+        request_fingerprint: dict[str, object] | None = None
+        if idempotency_key is not None:
+            idempotency_key_hash = _hash_text(_validate_idempotency_key(idempotency_key))
+            request_fingerprint = _request_fingerprint(
+                filename=validated_filename,
+                content_type=content_type,
+                content=content,
+            )
+            request_fingerprint_hash = _fingerprint_hash(request_fingerprint)
+            try:
+                existing = self._repository.get_call_by_idempotency_key(idempotency_key_hash)
+            except CallRepositoryError as exc:
+                raise CallPersistenceError("Could not load idempotent call") from exc
+            if existing is not None:
+                if existing.request_fingerprint_hash != request_fingerprint_hash:
+                    raise IdempotencyConflictError(
+                        "Idempotency-Key was already used for a different request"
+                    )
+                return existing.call
 
         call_id = uuid4()
         slug = _slugify(Path(validated_filename).stem)
@@ -93,7 +121,12 @@ class CallService:
             storage_version=stored_object.version,
         )
         try:
-            return self._repository.create_call_with_queued_job(call)
+            return self._repository.create_call_with_queued_job(
+                call,
+                idempotency_key_hash=idempotency_key_hash,
+                request_fingerprint_hash=request_fingerprint_hash,
+                request_fingerprint=request_fingerprint,
+            )
         except CallRepositoryError as exc:
             cleanup_failed = False
             logger.exception(
@@ -163,3 +196,35 @@ class CallService:
 def _slugify(value: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
     return slug or "call"
+
+
+def _validate_idempotency_key(value: str) -> str:
+    key = value.strip()
+    if not key:
+        raise InvalidCallUploadError("Idempotency-Key must not be empty")
+    if len(key.encode("utf-8")) > 255:
+        raise InvalidCallUploadError("Idempotency-Key must be 255 bytes or fewer")
+    return key
+
+
+def _request_fingerprint(
+    *,
+    filename: str,
+    content_type: str,
+    content: bytes,
+) -> dict[str, object]:
+    return {
+        "filename": filename,
+        "content_type": content_type,
+        "file_size_bytes": len(content),
+        "content_sha256": hashlib.sha256(content).hexdigest(),
+    }
+
+
+def _fingerprint_hash(fingerprint: dict[str, object]) -> str:
+    canonical = json.dumps(fingerprint, sort_keys=True, separators=(",", ":"))
+    return _hash_text(canonical)
+
+
+def _hash_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()

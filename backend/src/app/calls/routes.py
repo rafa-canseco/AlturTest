@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile, status
+from fastapi import APIRouter, File, Header, HTTPException, Query, Request, UploadFile, status
 
 from app.calls.models import (
     CallAnalysisRecord,
@@ -21,6 +21,7 @@ from app.calls.schemas import (
 )
 from app.calls.service import (
     CallIngestionError,
+    IdempotencyConflictError,
     CallPersistenceError,
     CallService,
     InvalidCallUploadError,
@@ -35,7 +36,11 @@ router = APIRouter(prefix="/calls", tags=["calls"])
     response_model=CallSummaryResponse,
     status_code=status.HTTP_201_CREATED,
 )
-def create_call(request: Request, file: UploadFile = File(...)) -> CallSummaryResponse:
+def create_call(
+    request: Request,
+    file: UploadFile = File(...),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> CallSummaryResponse:
     service = _call_service(request)
     content = file.file.read()
     try:
@@ -43,9 +48,12 @@ def create_call(request: Request, file: UploadFile = File(...)) -> CallSummaryRe
             filename=file.filename,
             content_type=file.content_type,
             content=content,
+            idempotency_key=idempotency_key,
         )
     except InvalidCallUploadError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except IdempotencyConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except CallIngestionError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
