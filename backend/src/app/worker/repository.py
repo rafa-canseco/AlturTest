@@ -155,6 +155,40 @@ class PostgresWorkerRepository:
                                 "Call was completed before the job claim could be recorded"
                             )
 
+                        cur.execute(
+                            """
+                            insert into processing_events (
+                                call_id,
+                                job_id,
+                                event_type,
+                                message,
+                                metadata
+                            )
+                            values (
+                                %(call_id)s,
+                                %(job_id)s,
+                                'job.claimed',
+                                'Call processing job claimed',
+                                %(metadata)s
+                            )
+                            """,
+                            {
+                                "call_id": claimed_job_row["call_id"],
+                                "job_id": claimed_job_row["id"],
+                                "metadata": Jsonb(
+                                    {
+                                        "stage": _stage_from_transcript_exists(
+                                            transcript_exists
+                                        ),
+                                        "attempt_count": int(
+                                            claimed_job_row["attempt_count"]
+                                        ),
+                                        "max_attempts": int(claimed_job_row["max_attempts"]),
+                                    }
+                                ),
+                            },
+                        )
+
                         return ClaimedCallProcessingJob(
                             job=_job_record_from_row(claimed_job_row),
                             call=_call_record_from_row(call_row),
@@ -194,6 +228,25 @@ class PostgresWorkerRepository:
                             """,
                             {"job_id": job_id, "call_id": call_id},
                         )
+                        cur.execute(
+                            """
+                            insert into processing_events (
+                                call_id,
+                                job_id,
+                                event_type,
+                                message,
+                                metadata
+                            )
+                            values (
+                                %(call_id)s,
+                                %(job_id)s,
+                                'call.completed',
+                                'Call processing completed',
+                                '{}'::jsonb
+                            )
+                            """,
+                            {"job_id": job_id, "call_id": call_id},
+                        )
         except Exception as exc:
             raise WorkerRepositoryError("Failed to complete call processing job") from exc
 
@@ -228,6 +281,25 @@ class PostgresWorkerRepository:
                             where id = %(job_id)s
                               and call_id = %(call_id)s
                               and status = 'processing'
+                            """,
+                            {"job_id": job_id, "call_id": call_id},
+                        )
+                        cur.execute(
+                            """
+                            insert into processing_events (
+                                call_id,
+                                job_id,
+                                event_type,
+                                message,
+                                metadata
+                            )
+                            values (
+                                %(call_id)s,
+                                %(job_id)s,
+                                'job.queued',
+                                'Call processing job queued',
+                                jsonb_build_object('stage', 'analysis')
+                            )
                             """,
                             {"job_id": job_id, "call_id": call_id},
                         )
@@ -271,6 +343,56 @@ class PostgresWorkerRepository:
                                 "call_id": call_id,
                                 "error_code": error_code,
                                 "error_message": error_message,
+                            },
+                        )
+                        failure_event_type = _failure_event_type(error_code)
+                        if failure_event_type is not None:
+                            cur.execute(
+                                """
+                                insert into processing_events (
+                                    call_id,
+                                    job_id,
+                                    event_type,
+                                    message,
+                                    metadata
+                                )
+                                values (
+                                    %(call_id)s,
+                                    %(job_id)s,
+                                    %(event_type)s,
+                                    %(message)s,
+                                    %(metadata)s
+                                )
+                                """,
+                                {
+                                    "call_id": call_id,
+                                    "job_id": job_id,
+                                    "event_type": failure_event_type,
+                                    "message": _failure_event_message(failure_event_type),
+                                    "metadata": Jsonb({"error_code": error_code}),
+                                },
+                            )
+                        cur.execute(
+                            """
+                            insert into processing_events (
+                                call_id,
+                                job_id,
+                                event_type,
+                                message,
+                                metadata
+                            )
+                            values (
+                                %(call_id)s,
+                                %(job_id)s,
+                                'call.failed',
+                                'Call processing failed',
+                                %(metadata)s
+                            )
+                            """,
+                            {
+                                "call_id": call_id,
+                                "job_id": job_id,
+                                "metadata": Jsonb({"error_code": error_code}),
                             },
                         )
         except Exception as exc:
@@ -344,34 +466,60 @@ class PostgresWorkerRepository:
     ) -> bool:
         try:
             with connect(self._database_url, row_factory=dict_row) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        insert into call_transcripts (
-                            call_id,
-                            transcript,
-                            transcript_metadata,
-                            stt_provider,
-                            stt_model
+                with conn.transaction():
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            insert into call_transcripts (
+                                call_id,
+                                transcript,
+                                transcript_metadata,
+                                stt_provider,
+                                stt_model
+                            )
+                            values (
+                                %(call_id)s,
+                                %(transcript)s,
+                                %(transcript_metadata)s,
+                                %(stt_provider)s,
+                                %(stt_model)s
+                            )
+                            on conflict (call_id) do nothing
+                            """,
+                            {
+                                "call_id": call_id,
+                                "transcript": transcript,
+                                "transcript_metadata": Jsonb(transcript_metadata),
+                                "stt_provider": stt_provider,
+                                "stt_model": stt_model,
+                            },
                         )
-                        values (
-                            %(call_id)s,
-                            %(transcript)s,
-                            %(transcript_metadata)s,
-                            %(stt_provider)s,
-                            %(stt_model)s
-                        )
-                        on conflict (call_id) do nothing
-                        """,
-                        {
-                            "call_id": call_id,
-                            "transcript": transcript,
-                            "transcript_metadata": Jsonb(transcript_metadata),
-                            "stt_provider": stt_provider,
-                            "stt_model": stt_model,
-                        },
-                    )
-                    return cur.rowcount == 1
+                        created = cur.rowcount == 1
+                        if created:
+                            metadata: dict[str, Any] = {"provider": stt_provider}
+                            if stt_model is not None:
+                                metadata["model"] = stt_model
+                            language_code = transcript_metadata.get("language_code")
+                            if language_code is not None:
+                                metadata["language_code"] = str(language_code)
+                            cur.execute(
+                                """
+                                insert into processing_events (
+                                    call_id,
+                                    event_type,
+                                    message,
+                                    metadata
+                                )
+                                values (
+                                    %(call_id)s,
+                                    'stt.succeeded',
+                                    'Speech transcription completed',
+                                    %(metadata)s
+                                )
+                                """,
+                                {"call_id": call_id, "metadata": Jsonb(metadata)},
+                            )
+                        return created
         except Exception as exc:
             raise WorkerRepositoryError("Failed to create call transcript") from exc
 
@@ -403,52 +551,81 @@ class PostgresWorkerRepository:
     def create_analysis(self, *, analysis: CallAnalysisCreate) -> bool:
         try:
             with connect(self._database_url, row_factory=dict_row) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        insert into call_analysis (
-                            call_id,
-                            summary,
-                            tags,
-                            intent,
-                            sentiment,
-                            next_action,
-                            risk_flags,
-                            llm_provider,
-                            llm_model,
-                            prompt_version,
-                            raw_llm_output
+                with conn.transaction():
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            insert into call_analysis (
+                                call_id,
+                                summary,
+                                tags,
+                                intent,
+                                sentiment,
+                                next_action,
+                                risk_flags,
+                                llm_provider,
+                                llm_model,
+                                prompt_version,
+                                raw_llm_output
+                            )
+                            values (
+                                %(call_id)s,
+                                %(summary)s,
+                                %(tags)s,
+                                %(intent)s,
+                                %(sentiment)s,
+                                %(next_action)s,
+                                %(risk_flags)s,
+                                %(llm_provider)s,
+                                %(llm_model)s,
+                                %(prompt_version)s,
+                                %(raw_llm_output)s
+                            )
+                            on conflict (call_id) do nothing
+                            """,
+                            {
+                                "call_id": analysis.call_id,
+                                "summary": analysis.summary,
+                                "tags": Jsonb(analysis.tags),
+                                "intent": analysis.intent,
+                                "sentiment": analysis.sentiment,
+                                "next_action": analysis.next_action,
+                                "risk_flags": Jsonb(analysis.risk_flags),
+                                "llm_provider": analysis.llm_provider,
+                                "llm_model": analysis.llm_model,
+                                "prompt_version": analysis.prompt_version,
+                                "raw_llm_output": Jsonb(analysis.raw_llm_output),
+                            },
                         )
-                        values (
-                            %(call_id)s,
-                            %(summary)s,
-                            %(tags)s,
-                            %(intent)s,
-                            %(sentiment)s,
-                            %(next_action)s,
-                            %(risk_flags)s,
-                            %(llm_provider)s,
-                            %(llm_model)s,
-                            %(prompt_version)s,
-                            %(raw_llm_output)s
-                        )
-                        on conflict (call_id) do nothing
-                        """,
-                        {
-                            "call_id": analysis.call_id,
-                            "summary": analysis.summary,
-                            "tags": Jsonb(analysis.tags),
-                            "intent": analysis.intent,
-                            "sentiment": analysis.sentiment,
-                            "next_action": analysis.next_action,
-                            "risk_flags": Jsonb(analysis.risk_flags),
-                            "llm_provider": analysis.llm_provider,
-                            "llm_model": analysis.llm_model,
-                            "prompt_version": analysis.prompt_version,
-                            "raw_llm_output": Jsonb(analysis.raw_llm_output),
-                        },
-                    )
-                    return cur.rowcount == 1
+                        created = cur.rowcount == 1
+                        if created:
+                            cur.execute(
+                                """
+                                insert into processing_events (
+                                    call_id,
+                                    event_type,
+                                    message,
+                                    metadata
+                                )
+                                values (
+                                    %(call_id)s,
+                                    'analysis.succeeded',
+                                    'Transcript analysis completed',
+                                    %(metadata)s
+                                )
+                                """,
+                                {
+                                    "call_id": analysis.call_id,
+                                    "metadata": Jsonb(
+                                        {
+                                            "provider": analysis.llm_provider,
+                                            "model": analysis.llm_model,
+                                            "prompt_version": analysis.prompt_version,
+                                        }
+                                    ),
+                                },
+                            )
+                        return created
         except Exception as exc:
             raise WorkerRepositoryError("Failed to create call analysis") from exc
 
@@ -487,3 +664,21 @@ def _transcript_record_from_row(row: dict[str, object]) -> CallTranscriptRecord:
         created_at=_datetime(row["created_at"]),
         updated_at=_datetime(row["updated_at"]),
     )
+
+
+def _stage_from_transcript_exists(transcript_exists: bool) -> str:
+    return "analysis" if transcript_exists else "transcription"
+
+
+def _failure_event_type(error_code: str) -> str | None:
+    if error_code in {"audio_download_failed", "stt_failed"}:
+        return "stt.failed"
+    if error_code == "analysis_failed":
+        return "analysis.failed"
+    return None
+
+
+def _failure_event_message(event_type: str) -> str:
+    if event_type == "stt.failed":
+        return "Speech transcription failed"
+    return "Transcript analysis failed"

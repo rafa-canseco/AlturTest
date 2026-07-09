@@ -9,11 +9,13 @@ from app.calls.models import (
     CallDetailRecord,
     CallRecord,
     CallTranscriptRecord,
+    ProcessingEventRecord,
 )
 from app.calls.schemas import (
     CallAnalysisResponse,
     CallDetailResponse,
     CallListResponse,
+    ProcessingEventResponse,
     CallSummaryResponse,
     CallTranscriptResponse,
 )
@@ -119,6 +121,7 @@ def _detail_response(detail: CallDetailRecord) -> CallDetailResponse:
             _transcript_response(detail.transcript) if detail.transcript is not None else None
         ),
         analysis=_analysis_response(detail.analysis) if detail.analysis is not None else None,
+        events=[_processing_event_response(event) for event in detail.events or []],
     )
 
 
@@ -149,4 +152,14 @@ def _analysis_response(analysis: CallAnalysisRecord) -> CallAnalysisResponse:
         raw_output=analysis.raw_llm_output,
         created_at=analysis.created_at,
         updated_at=analysis.updated_at,
+    )
+
+
+def _processing_event_response(event: ProcessingEventRecord) -> ProcessingEventResponse:
+    return ProcessingEventResponse(
+        event_id=event.id,
+        event_type=event.event_type,
+        message=event.message,
+        metadata=event.metadata,
+        created_at=event.created_at,
     )

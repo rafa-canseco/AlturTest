@@ -11,9 +11,10 @@ from app.calls.models import (
     CallDetailRecord,
     CallRecord,
     CallTranscriptRecord,
+    ProcessingEventRecord,
     StoredObject,
 )
-from app.calls.repository import CallRepositoryError
+from app.calls.repository import CallRepositoryError, PostgresCallRepository
 from app.calls.storage import CallStorageError
 from app.config import Settings
 from app.main import create_app
@@ -234,6 +235,51 @@ def test_get_call_returns_detail_with_transcript_and_analysis() -> None:
     }
 
 
+def test_get_call_returns_processing_events_in_order() -> None:
+    call = _record(original_filename="sales.mp3", status="processing")
+    first = _event_record(
+        call_id=call.id,
+        event_type="call.uploaded",
+        message="Call audio uploaded",
+        metadata={"content_type": "audio/mpeg", "file_size_bytes": 11},
+        created_at=_dt("2026-07-08T12:00:00+00:00"),
+    )
+    second = _event_record(
+        call_id=call.id,
+        event_type="job.claimed",
+        message="Call processing job claimed",
+        metadata={"stage": "transcription", "attempt_count": 1, "max_attempts": 3},
+        created_at=_dt("2026-07-08T12:01:00+00:00"),
+    )
+    repository = FakeCallRepository(
+        records=[call],
+        details={call.id: CallDetailRecord(call=call, events=[first, second])},
+    )
+    client = _client(repository=repository, storage=FakeCallStorage())
+
+    response = client.get(f"/calls/{call.id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["events"] == [
+        {
+            "event_id": str(first.id),
+            "event_type": "call.uploaded",
+            "message": "Call audio uploaded",
+            "metadata": {"content_type": "audio/mpeg", "file_size_bytes": 11},
+            "created_at": "2026-07-08T12:00:00Z",
+        },
+        {
+            "event_id": str(second.id),
+            "event_type": "job.claimed",
+            "message": "Call processing job claimed",
+            "metadata": {"stage": "transcription", "attempt_count": 1, "max_attempts": 3},
+            "created_at": "2026-07-08T12:01:00Z",
+        },
+    ]
+    assert "job_id" not in body["events"][1]
+
+
 def test_get_call_returns_failed_detail_with_partial_transcript() -> None:
     call = _record(
         original_filename="sales.mp3",
@@ -276,6 +322,28 @@ def test_get_call_returns_safe_error_when_repository_fails() -> None:
 
     assert response.status_code == 503
     assert response.json()["detail"] == "Could not load call"
+
+
+def test_postgres_call_repository_creates_upload_and_queue_events() -> None:
+    constants = "\n".join(
+        str(constant).lower()
+        for constant in PostgresCallRepository.create_call_with_queued_job.__code__.co_consts
+    )
+
+    assert "insert into processing_events" in constants
+    assert "call.uploaded" in constants
+    assert "job.queued" in constants
+    assert "stage', 'transcription'" in constants
+
+
+def test_postgres_call_repository_loads_events_in_created_order() -> None:
+    constants = "\n".join(
+        str(constant).lower()
+        for constant in PostgresCallRepository.get_call_detail.__code__.co_consts
+    )
+
+    assert "from processing_events" in constants
+    assert "order by created_at asc, id asc" in constants
 
 
 class FakeCallRepository:
@@ -447,6 +515,25 @@ def _analysis_record(*, call_id: UUID) -> CallAnalysisRecord:
         raw_llm_output={"summary": "Customer requested a product demo."},
         created_at=now,
         updated_at=now,
+    )
+
+
+def _event_record(
+    *,
+    call_id: UUID,
+    event_type: str,
+    message: str,
+    metadata: dict[str, object],
+    created_at: datetime,
+) -> ProcessingEventRecord:
+    return ProcessingEventRecord(
+        id=uuid4(),
+        call_id=call_id,
+        job_id=uuid4(),
+        event_type=event_type,
+        message=message,
+        metadata=metadata,
+        created_at=created_at,
     )
 
 
