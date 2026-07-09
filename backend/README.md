@@ -96,3 +96,8 @@ SUPABASE_STORAGE_BUCKET=call-audio
 
 Tests must not require live Supabase. Future repository and storage code should
 be written behind interfaces and covered with fakes or mocks by default.
+
+Production improvement: call ingestion does not implement `Idempotency-Key`
+semantics yet. A retried upload request can create a new `call_id`; production
+retry safety should add an idempotency table or request-key mapping before
+clients rely on automatic upload retries.
