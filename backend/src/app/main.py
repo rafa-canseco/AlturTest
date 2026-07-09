@@ -50,7 +50,7 @@ class _UnconfiguredCallRepository:
     def create_call_with_queued_job(self, call: object) -> object:
         raise CallRepositoryError(self._message)
 
-    def list_calls(self) -> list[object]:
+    def list_calls(self, *, limit: int = 50) -> list[object]:
         raise CallRepositoryError(self._message)
 
     def get_call(self, call_id: object) -> None:

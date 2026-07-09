@@ -136,6 +136,16 @@ def test_list_calls_honors_limit_query_param() -> None:
     assert repository.list_limits == [2]
 
 
+def test_list_calls_returns_safe_error_when_repository_unconfigured() -> None:
+    app = create_app(Settings(app_env="test"), call_storage=FakeCallStorage())
+    client = TestClient(app)
+
+    response = client.get("/calls")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Could not list calls"
+
+
 def test_get_call_returns_call_detail() -> None:
     call = _record(original_filename="sales.mp3")
     repository = FakeCallRepository(records=[call])
