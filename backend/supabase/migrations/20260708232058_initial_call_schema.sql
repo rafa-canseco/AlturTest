@@ -1,41 +1,14 @@
--- ALT-20: Initial Supabase Postgres schema and Storage contract.
+-- ALT-20: Initial Supabase Postgres schema.
 --
--- Storage contract:
+-- Local storage contract:
 -- - Bucket: call-audio
--- - Access: private; backend and worker use service-role credentials only.
 -- - Path convention: calls/{call_id}/{original_filename_slug}-{upload_token}.{ext}
 -- - Metadata persisted in calls: storage_bucket, storage_path, content_type,
 --   file_size_bytes, and optional storage_etag/storage_version.
 -- - Tests should use repository/storage fakes or mocks and must not require live
---   Supabase Storage or Postgres.
+--   providers.
 
 create extension if not exists pgcrypto;
-
-insert into storage.buckets (
-    id,
-    name,
-    public,
-    file_size_limit,
-    allowed_mime_types
-)
-values (
-    'call-audio',
-    'call-audio',
-    false,
-    524288000,
-    array[
-        'audio/mpeg',
-        'audio/mp3',
-        'audio/wav',
-        'audio/wave',
-        'audio/x-wav'
-    ]
-)
-on conflict (id) do update set
-    name = excluded.name,
-    public = excluded.public,
-    file_size_limit = excluded.file_size_limit,
-    allowed_mime_types = excluded.allowed_mime_types;
 
 do $$
 begin
