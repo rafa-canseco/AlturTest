@@ -20,6 +20,26 @@ uv run uvicorn app.main:app --reload
 uv run pytest
 ```
 
+The default test command runs unit tests only and does not require Supabase.
+
+Opt-in local Supabase integration tests:
+
+```sh
+supabase start
+supabase db reset
+
+export DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+export SUPABASE_URL="http://127.0.0.1:54321"
+export SUPABASE_SERVICE_ROLE_KEY="<service_role key from supabase status>"
+export SUPABASE_STORAGE_BUCKET="call-audio"
+
+uv run pytest -m integration
+```
+
+If the local Supabase env vars are missing or the local services are not
+reachable, integration tests skip with a clear reason instead of failing the
+normal unit suite.
+
 Configuration is loaded from environment variables. See `.env.example` for local values.
 
 ## Worker

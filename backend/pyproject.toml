@@ -22,3 +22,7 @@ dev-dependencies = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+addopts = "-m 'not integration'"
+markers = [
+    "integration: opt-in tests that require local Supabase/Postgres/Storage",
+]
