@@ -15,10 +15,19 @@ type CallSummary = {
   updatedAt?: string;
 };
 
+type AuditEvent = {
+  id: string;
+  type: string;
+  message: string;
+  metadata?: unknown;
+  createdAt?: string;
+};
+
 type CallDetail = CallSummary & {
   transcript?: string;
   analysis?: unknown;
   errorMessage?: string;
+  events: AuditEvent[];
 };
 
 type LoadState = "idle" | "loading" | "ready" | "error";
@@ -89,12 +98,36 @@ const normalizeSummary = (value: unknown): CallSummary | null => {
   };
 };
 
+const normalizeEvent = (value: unknown): AuditEvent | null => {
+  const record = toRecord(value);
+  if (!record) return null;
+
+  const id = pickString(record, ["event_id", "eventId", "id"]);
+  const type = pickString(record, ["event_type", "eventType", "type"]);
+  const message = pickString(record, ["message"]);
+
+  if (!id || !type || !message) return null;
+
+  return {
+    id,
+    type,
+    message,
+    metadata: record.metadata,
+    createdAt: pickString(record, ["created_at", "createdAt"]),
+  };
+};
+
 const normalizeDetail = (value: unknown): CallDetail | null => {
   const summary = normalizeSummary(value);
   const record = toRecord(value);
   if (!summary || !record) return null;
 
   const transcriptRecord = toRecord(record.transcript);
+  const events = Array.isArray(record.events)
+    ? record.events
+        .map(normalizeEvent)
+        .filter((event): event is AuditEvent => event !== null)
+    : [];
 
   return {
     ...summary,
@@ -109,6 +142,7 @@ const normalizeDetail = (value: unknown): CallDetail | null => {
       "errorMessage",
       "failure_reason",
     ]),
+    events,
   };
 };
 
@@ -166,6 +200,32 @@ const renderAnalysis = (analysis: unknown) => {
   return (
     <pre className="analysis-json">
       {JSON.stringify(analysis, null, 2)}
+    </pre>
+  );
+};
+
+const formatEventType = (value: string) =>
+  value
+    .replace(/[._-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+
+const hasMetadata = (metadata: unknown) => {
+  if (metadata === undefined || metadata === null) return false;
+  if (typeof metadata !== "object") return true;
+  if (Array.isArray(metadata)) return metadata.length > 0;
+  return Object.keys(metadata).length > 0;
+};
+
+const renderEventMetadata = (metadata: unknown) => {
+  if (!hasMetadata(metadata)) return null;
+
+  return (
+    <pre className="audit-metadata">
+      {typeof metadata === "string"
+        ? metadata
+        : JSON.stringify(metadata, null, 2)}
     </pre>
   );
 };
@@ -493,6 +553,37 @@ function App() {
                   </p>
                 </section>
               ) : null}
+
+              <section className="detail-section audit-section">
+                <div className="section-heading">
+                  <h3>Audit trail</h3>
+                  <span>{selectedCall?.events.length ?? 0}</span>
+                </div>
+                {selectedCall?.events.length ? (
+                  <ol className="audit-timeline" aria-label="Processing events">
+                    {selectedCall.events.map((event) => (
+                      <li className="audit-event" key={event.id}>
+                        <div className="audit-event-marker" aria-hidden="true" />
+                        <div className="audit-event-body">
+                          <div className="audit-event-head">
+                            <strong>{formatEventType(event.type)}</strong>
+                            <time dateTime={event.createdAt}>
+                              {formatDate(event.createdAt)}
+                            </time>
+                          </div>
+                          <p>{event.message}</p>
+                          <small>{event.id}</small>
+                          {renderEventMetadata(event.metadata)}
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                ) : detailState === "loading" ? (
+                  <p className="empty-copy">Loading audit trail.</p>
+                ) : (
+                  <p className="empty-copy">No processing events yet.</p>
+                )}
+              </section>
 
               <section className="detail-section">
                 <div className="section-heading">
