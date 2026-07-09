@@ -44,6 +44,7 @@ class CallAnalysisResponse(BaseModel):
     sentiment: str | None = None
     next_action: str | None = None
     risk_flags: list[str]
+    insights: dict[str, list[str]] = Field(default_factory=dict)
     provider: str
     model: str
     prompt_version: str

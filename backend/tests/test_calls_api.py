@@ -500,10 +500,28 @@ def test_get_call_returns_detail_with_transcript_and_analysis() -> None:
         "sentiment": "positive",
         "next_action": "schedule_demo",
         "risk_flags": ["pricing_objection"],
+        "insights": {
+            "objections": ["Price is too high."],
+            "commitments": [],
+            "follow_up_hints": ["Demo next week."],
+            "customer_questions": ["Can you send implementation details?"],
+            "agent_action_items": ["Schedule product demo."],
+            "escalation_notes": [],
+        },
         "provider": "openai",
         "model": "gpt-4.1-mini",
         "prompt_version": "call-analysis-v1",
-        "raw_output": {"summary": "Customer requested a product demo."},
+        "raw_output": {
+            "summary": "Customer requested a product demo.",
+            "insights": {
+                "objections": [" Price is too high. "],
+                "commitments": [],
+                "follow_up_hints": ["Demo next week."],
+                "customer_questions": ["Can you send implementation details?"],
+                "agent_action_items": ["Schedule product demo."],
+                "escalation_notes": [],
+            },
+        },
         "created_at": "2026-07-08T12:00:00Z",
         "updated_at": "2026-07-08T12:00:00Z",
     }
@@ -1092,7 +1110,17 @@ def _analysis_record(*, call_id: UUID) -> CallAnalysisRecord:
         llm_provider="openai",
         llm_model="gpt-4.1-mini",
         prompt_version="call-analysis-v1",
-        raw_llm_output={"summary": "Customer requested a product demo."},
+        raw_llm_output={
+            "summary": "Customer requested a product demo.",
+            "insights": {
+                "objections": [" Price is too high. "],
+                "commitments": [],
+                "follow_up_hints": ["Demo next week."],
+                "customer_questions": ["Can you send implementation details?"],
+                "agent_action_items": ["Schedule product demo."],
+                "escalation_notes": [],
+            },
+        },
         created_at=now,
         updated_at=now,
     )

@@ -209,5 +209,16 @@ output fails the job with `analysis_failed` and preserves the transcript. Raw
 provider responses for both successful and invalid analysis attempts are stored
 internally in `call_provider_attempts`.
 
+The analysis prompt requests the existing summary, tags, intent, sentiment,
+next action, and risk flags plus a bounded `insights` object. Insights are
+limited to objections, commitments, follow-up date/time hints, customer
+questions, agent action items, and escalation notes. Each category is optional
+in practice: unsupported categories should be empty arrays. The backend
+normalizes this object before persistence and before exposing
+`analysis.insights` on `GET /calls/{call_id}` by dropping unknown fields,
+non-string items, duplicates, and excess entries. Malformed or missing insights
+do not reject an otherwise valid core analysis, so summary and tags remain
+backward compatible.
+
 Tests must not require live Supabase. Future repository and storage code should
 be written behind interfaces and covered with fakes or mocks by default.

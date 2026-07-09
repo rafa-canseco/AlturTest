@@ -6,6 +6,8 @@ from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from app.calls.analysis_insights import INSIGHT_FIELDS, normalize_analysis_insights
+
 
 ALLOWED_SENTIMENTS = {"positive", "neutral", "negative", "mixed"}
 ALLOWED_NEXT_ACTIONS = {
@@ -71,6 +73,50 @@ ANALYSIS_RESPONSE_SCHEMA: dict[str, Any] = {
                 "type": "array",
                 "items": {"type": "string"},
             },
+            "insights": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "objections": {
+                        "type": "array",
+                        "maxItems": 10,
+                        "items": {"type": "string", "maxLength": 500},
+                        "description": "Customer objections or blockers mentioned in the call.",
+                    },
+                    "commitments": {
+                        "type": "array",
+                        "maxItems": 10,
+                        "items": {"type": "string", "maxLength": 500},
+                        "description": "Promises or commitments made by either side.",
+                    },
+                    "follow_up_hints": {
+                        "type": "array",
+                        "maxItems": 10,
+                        "items": {"type": "string", "maxLength": 500},
+                        "description": "Date, time, or scheduling hints for follow-up.",
+                    },
+                    "customer_questions": {
+                        "type": "array",
+                        "maxItems": 10,
+                        "items": {"type": "string", "maxLength": 500},
+                        "description": "Important questions asked by the customer.",
+                    },
+                    "agent_action_items": {
+                        "type": "array",
+                        "maxItems": 10,
+                        "items": {"type": "string", "maxLength": 500},
+                        "description": "Concrete tasks the agent should complete after the call.",
+                    },
+                    "escalation_notes": {
+                        "type": "array",
+                        "maxItems": 10,
+                        "items": {"type": "string", "maxLength": 500},
+                        "description": "Compliance, support, or escalation notes that need attention.",
+                    },
+                },
+                "required": list(INSIGHT_FIELDS),
+                "description": "Bounded business insights extracted from the conversation.",
+            },
         },
         "required": [
             "summary",
@@ -79,6 +125,7 @@ ANALYSIS_RESPONSE_SCHEMA: dict[str, Any] = {
             "sentiment",
             "next_action",
             "risk_flags",
+            "insights",
         ],
     },
 }
@@ -92,6 +139,7 @@ class TranscriptAnalysis:
     sentiment: str | None
     next_action: str | None
     risk_flags: list[str]
+    insights: dict[str, list[str]]
     raw_output: dict[str, Any]
     provider: str
     model: str
@@ -263,7 +311,9 @@ class OpenAIAnalysisClient:
                         "dominant next_action for the full transcript. Do not return per-call objects "
                         "for intent, sentiment, or next_action. Use the fixed tag categories from "
                         "the schema and return empty arrays for categories that do not apply. Return "
-                        "only JSON that matches the provided schema."
+                        "bounded insights only when they are explicitly supported by the transcript; "
+                        "otherwise return empty insight arrays. Return only JSON that matches the "
+                        "provided schema."
                     ),
                 },
                 {"role": "user", "content": transcript},
@@ -325,6 +375,10 @@ def validate_analysis_output(
     if not isinstance(risk_flags, list) or not all(isinstance(flag, str) for flag in risk_flags):
         raise InvalidLLMOutputError("Transcript analysis risk_flags must be an array of strings")
 
+    insights = normalize_analysis_insights(raw_output.get("insights"))
+    normalized_raw_output = dict(raw_output)
+    normalized_raw_output["insights"] = insights
+
     return TranscriptAnalysis(
         summary=summary.strip(),
         tags=tags,
@@ -332,7 +386,8 @@ def validate_analysis_output(
         sentiment=sentiment,
         next_action=next_action,
         risk_flags=risk_flags,
-        raw_output=raw_output,
+        insights=insights,
+        raw_output=normalized_raw_output,
         provider=provider,
         model=model,
         prompt_version=prompt_version,
