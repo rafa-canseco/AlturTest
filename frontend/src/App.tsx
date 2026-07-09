@@ -589,7 +589,7 @@ function App() {
                 <div className="section-heading">
                   <h3>Transcript</h3>
                   <span>
-                    {displayedCall.status === "completed" ? "Ready" : "Pending"}
+                    {selectedCall?.transcript ? "Ready" : "Pending"}
                   </span>
                 </div>
                 {selectedCall?.transcript ? (
@@ -603,7 +603,11 @@ function App() {
                 <div className="section-heading">
                   <h3>Analysis</h3>
                   <span>
-                    {selectedCall?.analysis ? "Ready" : "Pending"}
+                    {selectedCall?.analysis
+                      ? "Ready"
+                      : displayedCall.status === "failed"
+                        ? "Failed"
+                        : "Pending"}
                   </span>
                 </div>
                 {renderAnalysis(selectedCall?.analysis)}

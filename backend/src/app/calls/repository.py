@@ -281,7 +281,21 @@ class PostgresCallRepository:
                         select *
                         from processing_events
                         where call_id = %(call_id)s
-                        order by created_at asc, id asc
+                        order by
+                            created_at asc,
+                            case event_type
+                                when 'call.uploaded' then 10
+                                when 'job.queued' then 20
+                                when 'job.claimed' then 30
+                                when 'stt.succeeded' then 40
+                                when 'stt.failed' then 50
+                                when 'analysis.succeeded' then 60
+                                when 'analysis.failed' then 70
+                                when 'call.completed' then 80
+                                when 'call.failed' then 90
+                                else 100
+                            end asc,
+                            id asc
                         """,
                         {"call_id": call_id},
                     )

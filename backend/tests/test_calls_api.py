@@ -562,7 +562,10 @@ def test_postgres_call_repository_loads_events_in_created_order() -> None:
     )
 
     assert "from processing_events" in constants
-    assert "order by created_at asc, id asc" in constants
+    assert "order by" in constants
+    assert "created_at asc" in constants
+    assert "when 'call.uploaded' then 10" in constants
+    assert "when 'job.queued' then 20" in constants
 
 
 class FakeCallRepository:
