@@ -233,6 +233,8 @@ const normalizeDetail = (value: unknown): CallDetail | null => {
 
   const transcriptRecord = toRecord(record.transcript);
   const processingRecord =
+    toRecord(record.processing_job) ??
+    toRecord(record.processingJob) ??
     toRecord(record.processing) ??
     toRecord(record.processing_diagnostics) ??
     toRecord(record.processingDiagnostics) ??
