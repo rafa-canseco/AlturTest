@@ -52,13 +52,19 @@ export function Dropzone({
   return (
     <div
       className="dropzone"
+      {...getRootProps()}
+      aria-label="Choose or drop one WAV or MP3 audio file"
       data-accept={isDragAccept}
       data-active={isDragActive}
       data-reject={isDragReject}
-      {...getRootProps()}
+      role="button"
     >
       <input {...getInputProps()} />
-      <span className="dropzone-mark">+</span>
+      <span className="dropzone-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" role="img">
+          <path d="M12 4v16m8-8H4" />
+        </svg>
+      </span>
       <div>
         <strong>{file ? file.name : "Drop WAV/MP3 here"}</strong>
         <small>
