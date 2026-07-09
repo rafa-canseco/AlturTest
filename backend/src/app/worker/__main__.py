@@ -6,7 +6,7 @@ import socket
 import time
 
 from app.config import get_settings
-from app.calls.storage import SupabaseStorage
+from app.calls.storage import LocalCallStorage
 from app.worker.llm import OpenAIAnalysisClient
 from app.worker.processor import (
     AnalysisProcessor,
@@ -49,8 +49,7 @@ def main() -> None:
         use_dev_fake=args.dev_fake_processor,
         stage=args.stage,
         repository=repository,
-        supabase_url=settings.supabase_url,
-        supabase_service_role_key=settings.supabase_service_role_key,
+        local_storage_root=settings.local_storage_root,
         elevenlabs_api_key=settings.elevenlabs_api_key,
         elevenlabs_stt_model_id=settings.elevenlabs_stt_model_id,
         openai_api_key=settings.openai_api_key,
@@ -82,8 +81,7 @@ def _build_processor(
     use_dev_fake: bool,
     stage: str = "stt",
     repository: WorkerRepository | None = None,
-    supabase_url: str | None = None,
-    supabase_service_role_key: str | None = None,
+    local_storage_root: str = ".data/storage",
     elevenlabs_api_key: str | None = None,
     elevenlabs_stt_model_id: str = "scribe_v1",
     openai_api_key: str | None = None,
@@ -92,19 +90,10 @@ def _build_processor(
 ) -> CallProcessor:
     if use_dev_fake:
         return FakeCallProcessor()
-    if (
-        stage == "stt"
-        and repository
-        and supabase_url
-        and supabase_service_role_key
-        and elevenlabs_api_key
-    ):
+    if stage == "stt" and repository and elevenlabs_api_key:
         return TranscriptionProcessor(
             repository=repository,
-            storage=SupabaseStorage(
-                supabase_url=supabase_url,
-                service_role_key=supabase_service_role_key,
-            ),
+            storage=LocalCallStorage(local_storage_root),
             stt_client=ElevenLabsSTTClient(
                 api_key=elevenlabs_api_key,
                 model_id=elevenlabs_stt_model_id,

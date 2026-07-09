@@ -162,8 +162,8 @@ class PostgresCallRepository:
                                 'call.uploaded',
                                 'Call audio uploaded',
                                 jsonb_build_object(
-                                    'content_type', %(content_type)s,
-                                    'file_size_bytes', %(file_size_bytes)s
+                                    'content_type', %(content_type)s::text,
+                                    'file_size_bytes', %(file_size_bytes)s::bigint
                                 )
                             )
                             """,

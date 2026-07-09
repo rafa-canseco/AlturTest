@@ -446,8 +446,7 @@ def test_cli_builds_transcription_processor_when_required_env_is_present() -> No
     processor = _build_processor(
         use_dev_fake=False,
         repository=FakeWorkerRepository(claimed_job=None),
-        supabase_url="http://supabase.local",
-        supabase_service_role_key="fake-service-role",
+        local_storage_root=".data/test-storage",
         elevenlabs_api_key="fake-elevenlabs-key",
         elevenlabs_stt_model_id="scribe_v1",
     )
@@ -472,8 +471,7 @@ def test_cli_transcription_processor_claims_only_jobs_without_transcript() -> No
     processor = _build_processor(
         use_dev_fake=False,
         repository=FakeWorkerRepository(claimed_job=None),
-        supabase_url="http://supabase.local",
-        supabase_service_role_key="fake-service-role",
+        local_storage_root=".data/test-storage",
         elevenlabs_api_key="fake-elevenlabs-key",
         elevenlabs_stt_model_id="scribe_v1",
     )

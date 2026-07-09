@@ -29,14 +29,12 @@ supabase start
 supabase db reset
 
 export DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:54322/postgres"
-export SUPABASE_URL="http://127.0.0.1:54321"
-export SUPABASE_SERVICE_ROLE_KEY="<service_role key from supabase status>"
-export SUPABASE_STORAGE_BUCKET="call-audio"
+export CALL_STORAGE_BUCKET="call-audio"
 
 uv run pytest -m integration
 ```
 
-If the local Supabase env vars are missing or the local services are not
+If the local Supabase Postgres env var is missing or the local services are not
 reachable, integration tests skip with a clear reason instead of failing the
 normal unit suite.
 
@@ -51,7 +49,7 @@ uv run python -m app.worker
 ```
 
 The default worker claims queued jobs but uses a not-configured processor until
-the required Supabase and ElevenLabs env vars are present. A claimed job will
+the required local storage and ElevenLabs env vars are present. A claimed job will
 fail safely with `processor_not_configured` instead of being marked completed
 without transcript or analysis output.
 
@@ -62,8 +60,8 @@ the dev fake processor:
 uv run python -m app.worker --once --dev-fake-processor
 ```
 
-With ElevenLabs configured, the STT worker downloads private audio from Supabase
-Storage, sends it to ElevenLabs Speech to Text, stores one transcript in
+With ElevenLabs configured, the STT worker downloads private audio from local
+storage, sends it to ElevenLabs Speech to Text, stores one transcript in
 `call_transcripts`, leaves the call in `processing`, and requeues the job for
 the LLM analysis step. The STT worker claims only jobs where
 `transcript_exists=false`, so queued analysis jobs are not consumed by the STT
@@ -134,13 +132,12 @@ When retrying a failed call or job, worker code must clear the corresponding
 failure fields (`failed_at`, error code, and error message) before moving it
 back to `queued` or `processing`.
 
-Supabase Storage contract:
+Call audio storage contract:
 
-- Bucket name: `call-audio`.
-- Access: private; only backend and worker service credentials should access
-  audio.
-- Creation: managed by the SQL migration through `storage.buckets`; no manual
-  dashboard step is required.
+- Backend: local filesystem storage at `.data/storage`, configured with
+  `LOCAL_STORAGE_ROOT=.data/storage`.
+- Bucket name: `call-audio`. Locally this is a directory below the storage
+  root.
 - Path convention:
   `calls/{call_id}/{original_filename_slug}-{upload_token}.{ext}`.
 - Persisted metadata: `storage_bucket`, `storage_path`, `content_type`,
@@ -172,14 +169,16 @@ deletes its uploaded object. If stricter concurrent de-duplication becomes
 necessary, add a reservation state to `call_idempotency_keys` and carefully
 expire abandoned reservations.
 
-Required Supabase env vars:
+Required local env vars:
 
 ```sh
 DATABASE_URL=
-SUPABASE_URL=
-SUPABASE_SERVICE_ROLE_KEY=
-SUPABASE_STORAGE_BUCKET=call-audio
+CALL_STORAGE_BUCKET=call-audio
+LOCAL_STORAGE_ROOT=.data/storage
 ```
+
+The local demo path uses Supabase Docker for Postgres and local disk for audio,
+so it does not need a Supabase API key.
 
 Required ElevenLabs env vars for real STT:
 

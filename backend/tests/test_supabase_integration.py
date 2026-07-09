@@ -10,7 +10,6 @@ from psycopg.rows import dict_row
 
 from app.calls.models import CallCreate
 from app.calls.repository import PostgresCallRepository
-from app.calls.storage import CallStorageError, SupabaseStorage
 from app.worker.repository import PostgresWorkerRepository
 
 
@@ -31,27 +30,6 @@ def database_url() -> str:
         pytest.skip(f"Local Supabase Postgres is not reachable: {exc}")
 
     return value
-
-
-@pytest.fixture()
-def storage_config() -> tuple[str, str, str]:
-    supabase_url = os.environ.get("SUPABASE_URL")
-    service_role_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-    bucket = os.environ.get("SUPABASE_STORAGE_BUCKET", "call-audio")
-    missing = [
-        name
-        for name, value in (
-            ("SUPABASE_URL", supabase_url),
-            ("SUPABASE_SERVICE_ROLE_KEY", service_role_key),
-        )
-        if not value
-    ]
-    if missing:
-        pytest.skip(f"{', '.join(missing)} required for Supabase Storage integration tests")
-
-    assert supabase_url is not None
-    assert service_role_key is not None
-    return supabase_url, service_role_key, bucket
 
 
 @pytest.fixture()
@@ -104,32 +82,6 @@ def test_postgres_call_repository_creates_lists_and_loads_call_with_queued_job(
     assert job is not None
     assert job["status"] == "queued"
     assert job["attempt_count"] == 0
-
-
-def test_supabase_storage_uploads_under_call_path_and_deletes_object(
-    storage_config: tuple[str, str, str],
-) -> None:
-    supabase_url, service_role_key, bucket = storage_config
-    storage = SupabaseStorage(supabase_url=supabase_url, service_role_key=service_role_key)
-    call_id = uuid4()
-    path = f"calls/{call_id}/integration-call-token.mp3"
-
-    try:
-        stored = storage.upload_audio(
-            path=path,
-            content=b"integration-audio",
-            content_type="audio/mpeg",
-            bucket=bucket,
-        )
-    except CallStorageError as exc:
-        pytest.skip(f"Local Supabase Storage is not reachable or bucket is missing: {exc}")
-
-    try:
-        assert stored.bucket == bucket
-        assert stored.path == path
-        assert stored.path.startswith(f"calls/{call_id}/")
-    finally:
-        storage.delete_audio(path=path, bucket=bucket)
 
 
 def test_postgres_worker_repository_claims_queued_job_and_skips_completed_calls(
