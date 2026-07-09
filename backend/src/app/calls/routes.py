@@ -5,6 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, File, Header, HTTPException, Query, Request, UploadFile, status
 
+from app.calls.analysis_insights import normalize_analysis_insights
 from app.calls.models import (
     CallAnalysisRecord,
     CallDetailRecord,
@@ -237,6 +238,9 @@ def _analysis_response(analysis: CallAnalysisRecord) -> CallAnalysisResponse:
         sentiment=analysis.sentiment,
         next_action=analysis.next_action,
         risk_flags=analysis.risk_flags,
+        insights=normalize_analysis_insights(
+            analysis.raw_llm_output.get("insights") if analysis.raw_llm_output else None
+        ),
         provider=analysis.llm_provider,
         model=analysis.llm_model,
         prompt_version=analysis.prompt_version,

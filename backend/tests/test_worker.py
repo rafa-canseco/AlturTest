@@ -327,7 +327,17 @@ def test_analysis_processor_success_persists_analysis_and_completes_job() -> Non
             llm_provider="fake-llm",
             llm_model="fake-analysis-model",
             prompt_version="test-prompt",
-            raw_llm_output={"summary": "Customer asked for pricing."},
+            raw_llm_output={
+                "summary": "Customer asked for pricing.",
+                "insights": {
+                    "objections": ["Pricing is a concern."],
+                    "commitments": [],
+                    "follow_up_hints": ["Send pricing details tomorrow."],
+                    "customer_questions": ["What does implementation cost?"],
+                    "agent_action_items": ["Email pricing sheet."],
+                    "escalation_notes": [],
+                },
+            },
         )
     ]
     assert repository.created_provider_attempts == [
@@ -341,7 +351,17 @@ def test_analysis_processor_success_persists_analysis_and_completes_job() -> Non
             metadata={"prompt_version": "test-prompt"},
             raw_provider_response=None,
             raw_content=None,
-            parsed_output={"summary": "Customer asked for pricing."},
+            parsed_output={
+                "summary": "Customer asked for pricing.",
+                "insights": {
+                    "objections": ["Pricing is a concern."],
+                    "commitments": [],
+                    "follow_up_hints": ["Send pricing details tomorrow."],
+                    "customer_questions": ["What does implementation cost?"],
+                    "agent_action_items": ["Email pricing sheet."],
+                    "escalation_notes": [],
+                },
+            },
             error_message=None,
         )
     ]
@@ -523,6 +543,18 @@ def test_openai_analysis_client_requests_strict_schema_output() -> None:
         "risks",
         "outcomes",
     ]
+    assert schema["schema"]["properties"]["insights"]["additionalProperties"] is False
+    assert schema["schema"]["properties"]["insights"]["required"] == [
+        "objections",
+        "commitments",
+        "follow_up_hints",
+        "customer_questions",
+        "agent_action_items",
+        "escalation_notes",
+    ]
+    assert schema["schema"]["properties"]["insights"]["properties"]["objections"][
+        "maxItems"
+    ] == 10
     assert schema["schema"]["properties"]["next_action"]["enum"] == [
         "send_info",
         "schedule_demo",
@@ -553,6 +585,81 @@ def test_validate_analysis_output_normalizes_enum_strings() -> None:
 
     assert analysis.sentiment == "positive"
     assert analysis.next_action == "send_info"
+    assert analysis.insights == {
+        "objections": [],
+        "commitments": [],
+        "follow_up_hints": [],
+        "customer_questions": [],
+        "agent_action_items": [],
+        "escalation_notes": [],
+    }
+
+
+def test_validate_analysis_output_normalizes_bounded_insights() -> None:
+    analysis = validate_analysis_output(
+        raw_output={
+            "summary": "Customer asked about pricing and timing.",
+            "tags": {"topic": ["pricing"]},
+            "intent": "pricing",
+            "sentiment": "neutral",
+            "next_action": "follow_up",
+            "risk_flags": [],
+            "insights": {
+                "objections": [" Too expensive. ", "Too expensive.", 7],
+                "commitments": ["Agent promised a proposal."],
+                "follow_up_hints": ["next Tuesday at 3pm"],
+                "customer_questions": ["Can implementation finish this month?"],
+                "agent_action_items": [" Send proposal\nwith pricing. "],
+                "escalation_notes": ["Legal review needed."],
+                "unknown": ["ignored"],
+            },
+        },
+        provider="openai",
+        model="gpt-test",
+        prompt_version="test-prompt",
+    )
+
+    assert analysis.insights == {
+        "objections": ["Too expensive."],
+        "commitments": ["Agent promised a proposal."],
+        "follow_up_hints": ["next Tuesday at 3pm"],
+        "customer_questions": ["Can implementation finish this month?"],
+        "agent_action_items": ["Send proposal with pricing."],
+        "escalation_notes": ["Legal review needed."],
+    }
+    assert analysis.raw_output["insights"] == analysis.insights
+
+
+def test_validate_analysis_output_ignores_malformed_insights_without_rejecting_core_analysis() -> None:
+    analysis = validate_analysis_output(
+        raw_output={
+            "summary": "Customer asked for a demo.",
+            "tags": {"topic": ["demo"]},
+            "intent": "demo",
+            "sentiment": "positive",
+            "next_action": "schedule_demo",
+            "risk_flags": [],
+            "insights": {
+                "objections": "too expensive",
+                "commitments": [None, ""],
+                "follow_up_hints": ["  tomorrow  "],
+            },
+        },
+        provider="openai",
+        model="gpt-test",
+        prompt_version="test-prompt",
+    )
+
+    assert analysis.summary == "Customer asked for a demo."
+    assert analysis.tags == {"topic": ["demo"]}
+    assert analysis.insights == {
+        "objections": [],
+        "commitments": [],
+        "follow_up_hints": ["tomorrow"],
+        "customer_questions": [],
+        "agent_action_items": [],
+        "escalation_notes": [],
+    }
 
 
 def test_validate_analysis_output_rejects_per_call_next_action_object() -> None:
@@ -1002,6 +1109,14 @@ def _transcript_record(
 
 
 def _analysis(*, summary: str = "Customer asked for pricing.") -> TranscriptAnalysis:
+    insights = {
+        "objections": ["Pricing is a concern."],
+        "commitments": [],
+        "follow_up_hints": ["Send pricing details tomorrow."],
+        "customer_questions": ["What does implementation cost?"],
+        "agent_action_items": ["Email pricing sheet."],
+        "escalation_notes": [],
+    }
     return TranscriptAnalysis(
         summary=summary,
         tags={"customer_intent": "pricing"},
@@ -1009,7 +1124,8 @@ def _analysis(*, summary: str = "Customer asked for pricing.") -> TranscriptAnal
         sentiment="neutral",
         next_action="send_info",
         risk_flags=[],
-        raw_output={"summary": summary},
+        insights=insights,
+        raw_output={"summary": summary, "insights": insights},
         provider="fake-llm",
         model="fake-analysis-model",
         prompt_version="test-prompt",
