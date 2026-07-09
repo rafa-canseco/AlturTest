@@ -85,6 +85,14 @@ boundaries.
 
 Production changes:
 
+- Add business entities around the call: campaign, account/contact, channel,
+  promised payment, next follow-up date, and agent/version metadata.
+- Turn analysis output into operational outcomes: payment promise, discount
+  requested, escalation, objection, compliance risk, and follow-up task.
+- Add QA scorecards for protocol adherence, negotiation quality, customer mood,
+  and whether the call moved the account forward.
+- Add dashboards for contact rate, conversion, promise-to-pay rate, broken
+  promises, escalation rate, and tag drift by campaign.
 - Move audio to private object storage with signed uploads/downloads.
 - Split API, STT workers, and analysis workers into separate services.
 - Replace the demo Railway volume with S3-compatible storage or Supabase Storage.
@@ -95,8 +103,6 @@ Production changes:
 - Add migration and rollback runbooks.
 - Add backup/restore testing for Postgres.
 - Add explicit retention and deletion workflows.
-- Add JSON export for call records.
-- Add analytics dashboard for tag/status distribution.
 - Expand holdouts from synthetic cases to reviewer-labeled real transcripts.
 
 I would not immediately add a vector database. The current task is classification,
@@ -142,16 +148,29 @@ evaluation data, and support workflows all need to agree.
 
 ## If I Had More Time
 
-My next work would be:
+My next work would be business-first, not model-first:
 
-1. Direct-to-object-storage uploads so the API never buffers large files.
-2. Split deployed workers into separate services backed by object storage.
-3. Provider concurrency controls, cost metrics, and dead-letter handling.
-4. PII redaction plus retention/deletion workflows.
-5. More holdout cases from reviewer-labeled transcripts and regular regression
-   runs by prompt version.
-6. JSON export and analytics dashboard.
-7. Speaker role detection only after validating diarization quality.
+1. Campaign and account context. Store which campaign, segment, balance range,
+   channel, and strategy version produced each call. That makes summaries useful
+   for operations, not just interesting per-call notes.
+2. Promise-to-pay and follow-up extraction. Detect promised dates, payment
+   amounts, broken promises, discount requests, and next follow-up tasks so the
+   system can drive collections/sales workflows after the call.
+3. QA and compliance scorecards. Score whether the conversation followed the
+   intended script, handled objections correctly, avoided risky language, and
+   escalated when needed.
+4. Strategy analytics. Show contact rate, conversion, promise-to-pay rate,
+   escalation rate, common objections, sentiment by segment, and outcomes by
+   prompt/agent version.
+5. Human override feedback loop. Use reviewer corrections to measure tag quality,
+   tune prompts, and detect drift by campaign, language, and call type.
+6. A/B testing support. Compare call scripts, tone, timing, and offer strategies
+   against business outcomes instead of only model-level accuracy.
+7. Production hardening behind those workflows: direct-to-object-storage uploads,
+   separated workers, provider concurrency controls, DLQ, PII redaction,
+   retention/deletion, and audit trails.
 
-This is the path I would choose because it improves correctness, operability, and
-privacy before adding speculative features.
+I would avoid adding isolated AI features unless they connect to an operational
+metric. For Altur's domain, the valuable product is not "a prettier transcript";
+it is better contact strategy, better negotiation outcomes, safer compliance,
+and clearer visibility into why calls succeed or fail.
