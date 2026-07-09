@@ -312,6 +312,9 @@ const hasAnalysisContent = (analysis: AnalysisView | null) =>
       analysis?.tags.length,
   );
 
+const shouldCollapseText = (value: string | undefined, threshold: number) =>
+  Boolean(value && value.length > threshold);
+
 const renderTagGroups = (tags: TagCategory[]) => {
   if (tags.length === 0) {
     return <p className="empty-copy">No tags have been generated yet.</p>;
@@ -344,6 +347,8 @@ function App() {
   const [uploadState, setUploadState] = useState<LoadState>("idle");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [isTranscriptExpanded, setIsTranscriptExpanded] = useState(false);
+  const [isSummaryExpanded, setIsSummaryExpanded] = useState(false);
 
   const loadCalls = useCallback(async () => {
     setListState((current) => (current === "ready" ? current : "loading"));
@@ -415,6 +420,8 @@ function App() {
       return;
     }
 
+    setIsTranscriptExpanded(false);
+    setIsSummaryExpanded(false);
     void loadCallDetail(selectedCallId);
   }, [loadCallDetail, selectedCallId]);
 
@@ -503,6 +510,8 @@ function App() {
   const transcriptReady = Boolean(selectedCall?.transcript);
   const analysisFailed =
     displayedCall?.status === "failed" && transcriptReady && !analysisReady;
+  const transcriptCanExpand = shouldCollapseText(selectedCall?.transcript, 900);
+  const summaryCanExpand = shouldCollapseText(analysisView?.summary, 280);
 
   return (
     <main className="app-shell" data-api-base-url={config.apiBaseUrl}>
@@ -669,12 +678,31 @@ function App() {
               ) : null}
 
               <section className="detail-section">
-                <div className="section-heading">
-                  <h3>Transcript</h3>
-                  <span>{transcriptReady ? "Ready" : "Pending"}</span>
+                <div className="section-heading text-section-heading">
+                  <div>
+                    <h3>Transcript</h3>
+                    <span>{transcriptReady ? "Ready" : "Pending"}</span>
+                  </div>
+                  {transcriptCanExpand ? (
+                    <button
+                      className="text-toggle"
+                      type="button"
+                      aria-expanded={isTranscriptExpanded}
+                      onClick={() =>
+                        setIsTranscriptExpanded((current) => !current)
+                      }
+                    >
+                      {isTranscriptExpanded ? "Show less" : "Show full"}
+                    </button>
+                  ) : null}
                 </div>
                 {selectedCall?.transcript ? (
-                  <p className="transcript-copy">{selectedCall.transcript}</p>
+                  <div
+                    className="expandable-text transcript-shell"
+                    data-expanded={!transcriptCanExpand || isTranscriptExpanded}
+                  >
+                    <p className="transcript-copy">{selectedCall.transcript}</p>
+                  </div>
                 ) : (
                   <p className="empty-copy">
                     {displayedCall.status === "queued"
@@ -687,12 +715,29 @@ function App() {
               </section>
 
               <section className="detail-section">
-                <div className="section-heading">
-                  <h3>Summary</h3>
-                  <span>{analysisView?.summary ? "Ready" : "Pending"}</span>
+                <div className="section-heading text-section-heading">
+                  <div>
+                    <h3>Summary</h3>
+                    <span>{analysisView?.summary ? "Ready" : "Pending"}</span>
+                  </div>
+                  {summaryCanExpand ? (
+                    <button
+                      className="text-toggle"
+                      type="button"
+                      aria-expanded={isSummaryExpanded}
+                      onClick={() => setIsSummaryExpanded((current) => !current)}
+                    >
+                      {isSummaryExpanded ? "Show less" : "Show full"}
+                    </button>
+                  ) : null}
                 </div>
                 {analysisView?.summary ? (
-                  <p className="summary-copy">{analysisView.summary}</p>
+                  <div
+                    className="expandable-text summary-shell"
+                    data-expanded={!summaryCanExpand || isSummaryExpanded}
+                  >
+                    <p className="summary-copy">{analysisView.summary}</p>
+                  </div>
                 ) : (
                   <p className="empty-copy">
                     {analysisFailed
