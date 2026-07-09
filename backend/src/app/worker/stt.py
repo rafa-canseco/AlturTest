@@ -15,10 +15,27 @@ class Transcription:
     provider: str
     model: str
     metadata: dict[str, Any]
+    raw_provider_response: dict[str, Any] | None = None
+    raw_content: str | None = None
 
 
 class STTClientError(Exception):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        status: str = "failed",
+        raw_provider_response: dict[str, Any] | None = None,
+        raw_content: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.provider = provider
+        self.model = model
+        self.status = status
+        self.raw_provider_response = raw_provider_response
+        self.raw_content = raw_content
 
 
 class STTClient(Protocol):
@@ -76,21 +93,48 @@ class ElevenLabsSTTClient:
             },
         )
 
+        raw_content: str | None = None
         try:
             with urlopen(request, timeout=self._timeout_seconds) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+                raw_content = response.read().decode("utf-8")
+                payload = json.loads(raw_content)
+        except HTTPError as exc:
+            raw_content = _read_error_body(exc)
+            raise STTClientError(
+                "Speech transcription failed",
+                provider="elevenlabs",
+                model=self._model_id,
+                raw_provider_response=_json_object_or_none(raw_content),
+                raw_content=raw_content,
+            ) from exc
+        except json.JSONDecodeError as exc:
+            raise STTClientError(
+                "Speech transcription failed",
+                provider="elevenlabs",
+                model=self._model_id,
+                raw_content=raw_content,
+            ) from exc
+        except (URLError, TimeoutError) as exc:
             raise STTClientError("Speech transcription failed") from exc
 
         text = payload.get("text")
         if not isinstance(text, str) or not text.strip():
-            raise STTClientError("Speech transcription returned no transcript")
+            raise STTClientError(
+                "Speech transcription returned no transcript",
+                provider="elevenlabs",
+                model=self._model_id,
+                status="invalid",
+                raw_provider_response=payload,
+                raw_content=raw_content,
+            )
 
         return Transcription(
             text=text,
             provider="elevenlabs",
             model=self._model_id,
             metadata=_transcript_metadata(payload),
+            raw_provider_response=payload,
+            raw_content=raw_content,
         )
 
 
@@ -100,6 +144,23 @@ def _transcript_metadata(payload: dict[str, Any]) -> dict[str, Any]:
         if key in payload:
             metadata[key] = payload[key]
     return metadata
+
+
+def _read_error_body(error: HTTPError) -> str | None:
+    try:
+        return error.read().decode("utf-8")
+    except Exception:
+        return None
+
+
+def _json_object_or_none(value: str | None) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def _multipart_body(

@@ -9,6 +9,7 @@ from psycopg.types.json import Jsonb
 
 from app.calls.models import (
     CallAnalysisCreate,
+    CallProviderAttemptCreate,
     CallProcessingJobRecord,
     CallTranscriptRecord,
     ClaimedCallProcessingJob,
@@ -59,6 +60,9 @@ class WorkerRepository(Protocol):
         pass
 
     def has_analysis(self, *, call_id: UUID) -> bool:
+        pass
+
+    def create_provider_attempt(self, *, attempt: CallProviderAttemptCreate) -> bool:
         pass
 
     def create_analysis(self, *, analysis: CallAnalysisCreate) -> bool:
@@ -547,6 +551,65 @@ class PostgresWorkerRepository:
                     return cur.fetchone() is not None
         except Exception as exc:
             raise WorkerRepositoryError("Failed to check call analysis") from exc
+
+    def create_provider_attempt(self, *, attempt: CallProviderAttemptCreate) -> bool:
+        try:
+            with connect(self._database_url, row_factory=dict_row) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        insert into call_provider_attempts (
+                            call_id,
+                            job_id,
+                            stage,
+                            provider,
+                            model,
+                            status,
+                            metadata,
+                            raw_provider_response,
+                            raw_content,
+                            parsed_output,
+                            error_message
+                        )
+                        values (
+                            %(call_id)s,
+                            %(job_id)s,
+                            %(stage)s,
+                            %(provider)s,
+                            %(model)s,
+                            %(status)s,
+                            %(metadata)s,
+                            %(raw_provider_response)s,
+                            %(raw_content)s,
+                            %(parsed_output)s,
+                            %(error_message)s
+                        )
+                        """,
+                        {
+                            "call_id": attempt.call_id,
+                            "job_id": attempt.job_id,
+                            "stage": attempt.stage,
+                            "provider": attempt.provider,
+                            "model": attempt.model,
+                            "status": attempt.status,
+                            "metadata": Jsonb(attempt.metadata),
+                            "raw_provider_response": (
+                                Jsonb(attempt.raw_provider_response)
+                                if attempt.raw_provider_response is not None
+                                else None
+                            ),
+                            "raw_content": attempt.raw_content,
+                            "parsed_output": (
+                                Jsonb(attempt.parsed_output)
+                                if attempt.parsed_output is not None
+                                else None
+                            ),
+                            "error_message": attempt.error_message,
+                        },
+                    )
+                    return cur.rowcount == 1
+        except Exception as exc:
+            raise WorkerRepositoryError("Failed to create provider attempt") from exc
 
     def create_analysis(self, *, analysis: CallAnalysisCreate) -> bool:
         try:

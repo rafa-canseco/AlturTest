@@ -3,11 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.calls.models import CallAnalysisCreate, ClaimedCallProcessingJob
+from app.calls.models import CallAnalysisCreate, CallProviderAttemptCreate, ClaimedCallProcessingJob
 from app.calls.storage import CallStorage, CallStorageError
-from app.worker.llm import LLMClient, LLMClientError
+from app.worker.llm import InvalidLLMOutputError, LLMClient, LLMClientError, TranscriptAnalysis
 from app.worker.repository import WorkerRepository, WorkerRepositoryError
-from app.worker.stt import STTClient, STTClientError
+from app.worker.stt import STTClient, STTClientError, Transcription
 
 
 @dataclass(frozen=True)
@@ -72,6 +72,12 @@ class TranscriptionProcessor:
                 filename=call.original_filename,
                 content_type=call.content_type,
             )
+            self._record_stt_attempt(
+                claimed_job=claimed_job,
+                transcription=transcription,
+                status="valid",
+                error_message=None,
+            )
             self._repository.create_transcript(
                 call_id=call.id,
                 transcript=transcription.text,
@@ -85,6 +91,7 @@ class TranscriptionProcessor:
                 code="audio_download_failed",
             ) from exc
         except STTClientError as exc:
+            self._record_invalid_stt_attempt(claimed_job=claimed_job, error=exc)
             raise CallProcessorError(
                 "Speech transcription failed",
                 code="stt_failed",
@@ -93,6 +100,65 @@ class TranscriptionProcessor:
             raise
 
         return ProcessingResult(message="Transcript created; pending analysis", call_completed=False)
+
+    def _record_stt_attempt(
+        self,
+        *,
+        claimed_job: ClaimedCallProcessingJob,
+        transcription: Transcription,
+        status: str,
+        error_message: str | None,
+    ) -> None:
+        self._repository.create_provider_attempt(
+            attempt=CallProviderAttemptCreate(
+                call_id=claimed_job.call.id,
+                job_id=claimed_job.job.id,
+                stage="stt",
+                provider=transcription.provider,
+                model=transcription.model,
+                status=status,
+                metadata={
+                    "filename": claimed_job.call.original_filename,
+                    "content_type": claimed_job.call.content_type,
+                    "file_size_bytes": claimed_job.call.file_size_bytes,
+                },
+                raw_provider_response=transcription.raw_provider_response,
+                raw_content=transcription.raw_content,
+                parsed_output={
+                    "text": transcription.text,
+                    "metadata": transcription.metadata,
+                },
+                error_message=error_message,
+            )
+        )
+
+    def _record_invalid_stt_attempt(
+        self,
+        *,
+        claimed_job: ClaimedCallProcessingJob,
+        error: STTClientError,
+    ) -> None:
+        if error.provider is None:
+            return
+        self._repository.create_provider_attempt(
+            attempt=CallProviderAttemptCreate(
+                call_id=claimed_job.call.id,
+                job_id=claimed_job.job.id,
+                stage="stt",
+                provider=error.provider,
+                model=error.model,
+                status=error.status,
+                metadata={
+                    "filename": claimed_job.call.original_filename,
+                    "content_type": claimed_job.call.content_type,
+                    "file_size_bytes": claimed_job.call.file_size_bytes,
+                },
+                raw_provider_response=error.raw_provider_response,
+                raw_content=error.raw_content,
+                parsed_output=None,
+                error_message=str(error),
+            )
+        )
 
 
 class AnalysisProcessor:
@@ -119,6 +185,12 @@ class AnalysisProcessor:
 
         try:
             analysis = self._llm_client.analyze_transcript(transcript=transcript.transcript)
+            self._record_analysis_attempt(
+                claimed_job=claimed_job,
+                analysis=analysis,
+                validation_status="valid",
+                validation_error=None,
+            )
             self._repository.create_analysis(
                 analysis=CallAnalysisCreate(
                     call_id=call_id,
@@ -134,9 +206,85 @@ class AnalysisProcessor:
                     raw_llm_output=analysis.raw_output,
                 )
             )
+        except InvalidLLMOutputError as exc:
+            self._record_invalid_analysis_attempt(claimed_job=claimed_job, error=exc)
+            raise CallProcessorError("Transcript analysis failed", code="analysis_failed") from exc
         except LLMClientError as exc:
+            self._record_failed_analysis_attempt(claimed_job=claimed_job, error=exc)
             raise CallProcessorError("Transcript analysis failed", code="analysis_failed") from exc
         except WorkerRepositoryError:
             raise
 
         return ProcessingResult(message="Analysis created")
+
+    def _record_analysis_attempt(
+        self,
+        *,
+        claimed_job: ClaimedCallProcessingJob,
+        analysis: TranscriptAnalysis,
+        validation_status: str,
+        validation_error: str | None,
+    ) -> None:
+        self._repository.create_provider_attempt(
+            attempt=CallProviderAttemptCreate(
+                call_id=claimed_job.call.id,
+                job_id=claimed_job.job.id,
+                stage="analysis",
+                provider=analysis.provider,
+                model=analysis.model,
+                status=validation_status,
+                metadata={"prompt_version": analysis.prompt_version},
+                raw_provider_response=analysis.raw_provider_response,
+                raw_content=analysis.raw_content,
+                parsed_output=analysis.raw_output,
+                error_message=validation_error,
+            )
+        )
+
+    def _record_invalid_analysis_attempt(
+        self,
+        *,
+        claimed_job: ClaimedCallProcessingJob,
+        error: InvalidLLMOutputError,
+    ) -> None:
+        if error.provider is None or error.model is None or error.prompt_version is None:
+            return
+        self._repository.create_provider_attempt(
+            attempt=CallProviderAttemptCreate(
+                call_id=claimed_job.call.id,
+                job_id=claimed_job.job.id,
+                stage="analysis",
+                provider=error.provider,
+                model=error.model,
+                status="invalid",
+                metadata={"prompt_version": error.prompt_version},
+                raw_provider_response=error.raw_provider_response,
+                raw_content=error.raw_content,
+                parsed_output=error.parsed_output,
+                error_message=str(error),
+            )
+        )
+
+    def _record_failed_analysis_attempt(
+        self,
+        *,
+        claimed_job: ClaimedCallProcessingJob,
+        error: LLMClientError,
+    ) -> None:
+        if error.provider is None or error.model is None or error.prompt_version is None:
+            return
+        self._repository.create_provider_attempt(
+            attempt=CallProviderAttemptCreate(
+                call_id=claimed_job.call.id,
+                job_id=claimed_job.job.id,
+                stage="analysis",
+                provider=error.provider,
+                model=error.model,
+                status=error.status,
+                metadata={"prompt_version": error.prompt_version},
+                raw_provider_response=error.raw_provider_response,
+                raw_content=error.raw_content,
+                parsed_output=None,
+                error_message=str(error),
+            )
+        )
