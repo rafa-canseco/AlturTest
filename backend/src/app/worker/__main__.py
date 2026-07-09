@@ -7,8 +7,14 @@ import time
 
 from app.config import get_settings
 from app.calls.storage import SupabaseStorage
-from app.worker.processor import CallProcessor, FakeCallProcessor, NotConfiguredCallProcessor
-from app.worker.processor import TranscriptionProcessor
+from app.worker.llm import OpenAIAnalysisClient
+from app.worker.processor import (
+    AnalysisProcessor,
+    CallProcessor,
+    FakeCallProcessor,
+    NotConfiguredCallProcessor,
+    TranscriptionProcessor,
+)
 from app.worker.repository import PostgresWorkerRepository, WorkerRepository
 from app.worker.service import WorkerService
 from app.worker.stt import ElevenLabsSTTClient
@@ -20,6 +26,12 @@ def main() -> None:
     parser.add_argument("--once", action="store_true", help="Process at most one available job.")
     parser.add_argument("--limit", type=int, default=None, help="Stop after this many claimed jobs.")
     parser.add_argument("--poll-interval-seconds", type=float, default=5.0)
+    parser.add_argument(
+        "--stage",
+        choices=("stt", "analysis"),
+        default="stt",
+        help="Worker stage to run. STT claims jobs without transcripts; analysis claims jobs with transcripts.",
+    )
     parser.add_argument(
         "--dev-fake-processor",
         action="store_true",
@@ -35,11 +47,15 @@ def main() -> None:
     repository = PostgresWorkerRepository(settings.database_url)
     processor = _build_processor(
         use_dev_fake=args.dev_fake_processor,
+        stage=args.stage,
         repository=repository,
         supabase_url=settings.supabase_url,
         supabase_service_role_key=settings.supabase_service_role_key,
         elevenlabs_api_key=settings.elevenlabs_api_key,
         elevenlabs_stt_model_id=settings.elevenlabs_stt_model_id,
+        openai_api_key=settings.openai_api_key,
+        openai_analysis_model=settings.openai_analysis_model,
+        analysis_prompt_version=settings.analysis_prompt_version,
     )
     service = WorkerService(
         repository=repository,
@@ -47,6 +63,7 @@ def main() -> None:
         claim_transcript_exists=_claim_transcript_exists(
             use_dev_fake=args.dev_fake_processor,
             processor=processor,
+            stage=args.stage,
         ),
     )
     processed = 0
@@ -63,15 +80,25 @@ def main() -> None:
 def _build_processor(
     *,
     use_dev_fake: bool,
+    stage: str = "stt",
     repository: WorkerRepository | None = None,
     supabase_url: str | None = None,
     supabase_service_role_key: str | None = None,
     elevenlabs_api_key: str | None = None,
     elevenlabs_stt_model_id: str = "scribe_v1",
+    openai_api_key: str | None = None,
+    openai_analysis_model: str = "gpt-4.1-mini",
+    analysis_prompt_version: str = "altur-analysis-v1",
 ) -> CallProcessor:
     if use_dev_fake:
         return FakeCallProcessor()
-    if repository and supabase_url and supabase_service_role_key and elevenlabs_api_key:
+    if (
+        stage == "stt"
+        and repository
+        and supabase_url
+        and supabase_service_role_key
+        and elevenlabs_api_key
+    ):
         return TranscriptionProcessor(
             repository=repository,
             storage=SupabaseStorage(
@@ -83,14 +110,34 @@ def _build_processor(
                 model_id=elevenlabs_stt_model_id,
             ),
         )
+    if stage == "analysis" and repository and openai_api_key:
+        return AnalysisProcessor(
+            repository=repository,
+            llm_client=OpenAIAnalysisClient(
+                api_key=openai_api_key,
+                model=openai_analysis_model,
+                prompt_version=analysis_prompt_version,
+            ),
+        )
     return NotConfiguredCallProcessor()
 
 
-def _claim_transcript_exists(*, use_dev_fake: bool, processor: CallProcessor) -> bool | None:
+def _claim_transcript_exists(
+    *,
+    use_dev_fake: bool,
+    processor: CallProcessor,
+    stage: str = "stt",
+) -> bool | None:
     if use_dev_fake:
         return None
     if isinstance(processor, TranscriptionProcessor):
         return False
+    if isinstance(processor, AnalysisProcessor):
+        return True
+    if stage == "stt":
+        return False
+    if stage == "analysis":
+        return True
     return None
 
 

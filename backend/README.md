@@ -62,14 +62,26 @@ the dev fake processor:
 uv run python -m app.worker --once --dev-fake-processor
 ```
 
-With ElevenLabs configured, the worker downloads private audio from Supabase
+With ElevenLabs configured, the STT worker downloads private audio from Supabase
 Storage, sends it to ElevenLabs Speech to Text, stores one transcript in
 `call_transcripts`, leaves the call in `processing`, and requeues the job for
-the later LLM analysis step. ALT-11 should branch on the existing transcript and
-run analysis instead of STT; claimed jobs include a `transcript_exists` flag for
-that handoff. The STT worker claims only jobs where `transcript_exists=false`,
-so queued analysis jobs are not consumed by the STT processor. OpenAI/LLM
-analysis and `call_analysis` writes are intentionally not implemented yet.
+the LLM analysis step. The STT worker claims only jobs where
+`transcript_exists=false`, so queued analysis jobs are not consumed by the STT
+processor.
+
+```sh
+uv run python -m app.worker --stage stt
+```
+
+With OpenAI configured, the analysis worker claims only jobs where
+`transcript_exists=true`, reads the persisted transcript, writes one validated
+row to `call_analysis`, then marks the job and call completed. If analysis
+already exists for the call, the worker completes the job without calling the
+LLM again.
+
+```sh
+uv run python -m app.worker --stage analysis
+```
 
 ## Supabase Contract
 
@@ -154,6 +166,18 @@ ELEVENLABS_STT_MODEL_ID=scribe_v1
 real API keys to source, tests, README files, or local env examples. The default
 test suite uses fakes and does not require ElevenLabs credentials or make live
 provider calls.
+
+Required OpenAI env vars for real LLM analysis:
+
+```sh
+OPENAI_API_KEY=
+OPENAI_ANALYSIS_MODEL=gpt-4.1-mini
+ANALYSIS_PROMPT_VERSION=altur-analysis-v1
+```
+
+`OPENAI_API_KEY` must be provided by the runtime environment. Analysis output is
+validated against the `call_analysis` schema before persistence; malformed model
+output fails the job with `analysis_failed` and preserves the transcript.
 
 Tests must not require live Supabase. Future repository and storage code should
 be written behind interfaces and covered with fakes or mocks by default.

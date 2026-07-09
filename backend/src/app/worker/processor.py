@@ -3,8 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.calls.models import ClaimedCallProcessingJob
+from app.calls.models import CallAnalysisCreate, ClaimedCallProcessingJob
 from app.calls.storage import CallStorage, CallStorageError
+from app.worker.llm import LLMClient, LLMClientError
 from app.worker.repository import WorkerRepository, WorkerRepositoryError
 from app.worker.stt import STTClient, STTClientError
 
@@ -92,3 +93,50 @@ class TranscriptionProcessor:
             raise
 
         return ProcessingResult(message="Transcript created; pending analysis", call_completed=False)
+
+
+class AnalysisProcessor:
+    def __init__(
+        self,
+        *,
+        repository: WorkerRepository,
+        llm_client: LLMClient,
+    ) -> None:
+        self._repository = repository
+        self._llm_client = llm_client
+
+    def process(self, claimed_job: ClaimedCallProcessingJob) -> ProcessingResult:
+        call_id = claimed_job.call.id
+        if self._repository.has_analysis(call_id=call_id):
+            return ProcessingResult(message="Analysis already exists")
+
+        transcript = self._repository.get_transcript(call_id=call_id)
+        if transcript is None:
+            return ProcessingResult(
+                message="Transcript not ready for analysis",
+                call_completed=False,
+            )
+
+        try:
+            analysis = self._llm_client.analyze_transcript(transcript=transcript.transcript)
+            self._repository.create_analysis(
+                analysis=CallAnalysisCreate(
+                    call_id=call_id,
+                    summary=analysis.summary,
+                    tags=analysis.tags,
+                    intent=analysis.intent,
+                    sentiment=analysis.sentiment,
+                    next_action=analysis.next_action,
+                    risk_flags=analysis.risk_flags,
+                    llm_provider=analysis.provider,
+                    llm_model=analysis.model,
+                    prompt_version=analysis.prompt_version,
+                    raw_llm_output=analysis.raw_output,
+                )
+            )
+        except LLMClientError as exc:
+            raise CallProcessorError("Transcript analysis failed", code="analysis_failed") from exc
+        except WorkerRepositoryError:
+            raise
+
+        return ProcessingResult(message="Analysis created")

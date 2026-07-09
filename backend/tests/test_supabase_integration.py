@@ -192,6 +192,52 @@ def test_postgres_worker_repository_claims_queued_job_and_skips_completed_calls(
     assert completed["job_status"] == "queued"
 
 
+def test_postgres_worker_repository_claims_only_jobs_with_transcripts_for_analysis(
+    database_url: str,
+    db_cleanup: list[UUID],
+) -> None:
+    repository = PostgresWorkerRepository(database_url)
+    transcript_call_id = uuid4()
+    no_transcript_call_id = uuid4()
+    db_cleanup.extend([transcript_call_id, no_transcript_call_id])
+
+    _insert_call_with_job(
+        database_url=database_url,
+        call_id=no_transcript_call_id,
+        call_status="processing",
+        job_status="queued",
+    )
+    _insert_call_with_job(
+        database_url=database_url,
+        call_id=transcript_call_id,
+        call_status="processing",
+        job_status="queued",
+    )
+    with connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                insert into call_transcripts (
+                    call_id,
+                    transcript,
+                    stt_provider,
+                    stt_model
+                )
+                values (%s, 'Customer wants pricing.', 'elevenlabs', 'scribe_v1')
+                """,
+                (transcript_call_id,),
+            )
+
+    claimed = repository.claim_next_job(
+        worker_id="analysis-worker",
+        transcript_exists=True,
+    )
+
+    assert claimed is not None
+    assert claimed.call.id == transcript_call_id
+    assert claimed.transcript_exists is True
+
+
 def _insert_call_with_job(
     *,
     database_url: str,
