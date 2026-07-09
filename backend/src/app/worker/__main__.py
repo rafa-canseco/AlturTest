@@ -6,7 +6,8 @@ import socket
 import time
 
 from app.config import get_settings
-from app.calls.storage import LocalCallStorage
+from app.calls.storage import CallStorage, LocalCallStorage
+from app.main import _build_call_storage
 from app.worker.llm import OpenAIAnalysisClient
 from app.worker.processor import (
     AnalysisProcessor,
@@ -49,7 +50,7 @@ def main() -> None:
         use_dev_fake=args.dev_fake_processor,
         stage=args.stage,
         repository=repository,
-        local_storage_root=settings.local_storage_root,
+        storage=_build_call_storage(settings),
         elevenlabs_api_key=settings.elevenlabs_api_key,
         elevenlabs_stt_model_id=settings.elevenlabs_stt_model_id,
         openai_api_key=settings.openai_api_key,
@@ -81,6 +82,7 @@ def _build_processor(
     use_dev_fake: bool,
     stage: str = "stt",
     repository: WorkerRepository | None = None,
+    storage: CallStorage | None = None,
     local_storage_root: str = ".data/storage",
     elevenlabs_api_key: str | None = None,
     elevenlabs_stt_model_id: str = "scribe_v1",
@@ -93,7 +95,7 @@ def _build_processor(
     if stage == "stt" and repository and elevenlabs_api_key:
         return TranscriptionProcessor(
             repository=repository,
-            storage=LocalCallStorage(local_storage_root),
+            storage=storage or LocalCallStorage(local_storage_root),
             stt_client=ElevenLabsSTTClient(
                 api_key=elevenlabs_api_key,
                 model_id=elevenlabs_stt_model_id,
