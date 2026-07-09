@@ -1,0 +1,180 @@
+{
+  "cases": [
+    {
+      "case_id": "angry_customer_escalation",
+      "checked_fields": [
+        "next_action",
+        "risk_flags",
+        "sentiment",
+        "summary_keywords",
+        "tags.customer_intents",
+        "tags.outcomes",
+        "tags.products",
+        "tags.risks",
+        "tags.topics"
+      ],
+      "field_scores": {
+        "next_action": {
+          "checked": 1,
+          "matched": 1,
+          "score": 1.0
+        },
+        "risk_flags": {
+          "checked": 1,
+          "matched": 1,
+          "score": 1.0
+        },
+        "sentiment": {
+          "checked": 1,
+          "matched": 1,
+          "score": 1.0
+        },
+        "summary_keywords": {
+          "checked": 3,
+          "matched": 3,
+          "score": 1.0
+        },
+        "tags.customer_intents": {
+          "checked": 1,
+          "matched": 1,
+          "score": 1.0
+        },
+        "tags.outcomes": {
+          "checked": 1,
+          "matched": 1,
+          "score": 1.0
+        },
+        "tags.products": {
+          "checked": 2,
+          "matched": 2,
+          "score": 1.0
+        },
+        "tags.risks": {
+          "checked": 2,
+          "matched": 2,
+          "score": 1.0
+        },
+        "tags.topics": {
+          "checked": 2,
+          "matched": 2,
+          "score": 1.0
+        }
+      },
+      "mismatched_fields": [],
+      "passed": true
+    },
+    {
+      "case_id": "damaged_order_refund",
+      "checked_fields": [
+        "next_action",
+        "risk_flags",
+        "sentiment",
+        "summary_keywords",
+        "tags.customer_intents",
+        "tags.outcomes",
+        "tags.products",
+        "tags.risks",
+        "tags.topics"
+      ],
+      "field_scores": {
+        "next_action": {
+          "checked": 1,
+          "matched": 1,
+          "score": 1.0
+        },
+        "risk_flags": {
+          "checked": 1,
+          "matched": 1,
+          "score": 1.0
+        },
+        "sentiment": {
+          "checked": 1,
+          "matched": 1,
+          "score": 1.0
+        },
+        "summary_keywords": {
+          "checked": 3,
+          "matched": 3,
+          "score": 1.0
+        },
+        "tags.customer_intents": {
+          "checked": 2,
+          "matched": 2,
+          "score": 1.0
+        },
+        "tags.outcomes": {
+          "checked": 2,
+          "matched": 2,
+          "score": 1.0
+        },
+        "tags.products": {
+          "checked": 1,
+          "matched": 1,
+          "score": 1.0
+        },
+        "tags.risks": {
+          "checked": 1,
+          "matched": 1,
+          "score": 1.0
+        },
+        "tags.topics": {
+          "checked": 2,
+          "matched": 2,
+          "score": 1.0
+        }
+      },
+      "mismatched_fields": [],
+      "passed": true
+    }
+  ],
+  "failed_cases": 0,
+  "field_scores": {
+    "next_action": {
+      "checked": 2,
+      "matched": 2,
+      "score": 1.0
+    },
+    "risk_flags": {
+      "checked": 2,
+      "matched": 2,
+      "score": 1.0
+    },
+    "sentiment": {
+      "checked": 2,
+      "matched": 2,
+      "score": 1.0
+    },
+    "summary_keywords": {
+      "checked": 6,
+      "matched": 6,
+      "score": 1.0
+    },
+    "tags.customer_intents": {
+      "checked": 3,
+      "matched": 3,
+      "score": 1.0
+    },
+    "tags.outcomes": {
+      "checked": 3,
+      "matched": 3,
+      "score": 1.0
+    },
+    "tags.products": {
+      "checked": 3,
+      "matched": 3,
+      "score": 1.0
+    },
+    "tags.risks": {
+      "checked": 3,
+      "matched": 3,
+      "score": 1.0
+    },
+    "tags.topics": {
+      "checked": 4,
+      "matched": 4,
+      "score": 1.0
+    }
+  },
+  "passed_cases": 2,
+  "total_cases": 2
+}

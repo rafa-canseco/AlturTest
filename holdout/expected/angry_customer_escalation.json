@@ -1,0 +1,35 @@
+{
+  "id": "angry_customer_escalation",
+  "expected_output": {
+    "summary_keywords": [
+      "voucher",
+      "escalate",
+      "discount code"
+    ],
+    "sentiment": "negative",
+    "next_action": "escalate",
+    "tags": {
+      "topics": [
+        "voucher issue",
+        "escalation"
+      ],
+      "customer_intents": [
+        "resolve voucher issue"
+      ],
+      "products": [
+        "voucher",
+        "discount code"
+      ],
+      "risks": [
+        "customer churn",
+        "verbal abuse"
+      ],
+      "outcomes": [
+        "escalation promised"
+      ]
+    },
+    "risk_flags": [
+      "customer churn"
+    ]
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "id": "damaged_order_refund",
+  "output": {
+    "summary": "The customer reports a damaged blender and asks for a refund or replacement. The agent opens a claim and promises return instructions.",
+    "sentiment": "negative",
+    "next_action": "follow_up",
+    "tags": {
+      "topics": [
+        "damaged order",
+        "refund request"
+      ],
+      "customer_intents": [
+        "request refund",
+        "request replacement"
+      ],
+      "products": [
+        "blender"
+      ],
+      "risks": [
+        "customer dissatisfaction"
+      ],
+      "outcomes": [
+        "claim opened",
+        "return instructions promised"
+      ]
+    },
+    "risk_flags": [
+      "customer dissatisfaction"
+    ]
+  }
+}

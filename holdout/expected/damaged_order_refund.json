@@ -1,0 +1,35 @@
+{
+  "id": "damaged_order_refund",
+  "expected_output": {
+    "summary_keywords": [
+      "damaged",
+      "refund",
+      "return instructions"
+    ],
+    "sentiment": "negative",
+    "next_action": "follow_up",
+    "tags": {
+      "topics": [
+        "damaged order",
+        "refund request"
+      ],
+      "customer_intents": [
+        "request refund",
+        "request replacement"
+      ],
+      "products": [
+        "blender"
+      ],
+      "risks": [
+        "customer dissatisfaction"
+      ],
+      "outcomes": [
+        "claim opened",
+        "return instructions promised"
+      ]
+    },
+    "risk_flags": [
+      "customer dissatisfaction"
+    ]
+  }
+}

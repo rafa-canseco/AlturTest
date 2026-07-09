@@ -1,0 +1,31 @@
+{
+  "id": "angry_customer_escalation",
+  "output": {
+    "summary": "The customer is angry because a voucher does not work. The agent promises to escalate the case and follow up with a replacement discount code.",
+    "sentiment": "negative",
+    "next_action": "escalate",
+    "tags": {
+      "topics": [
+        "voucher issue",
+        "escalation"
+      ],
+      "customer_intents": [
+        "resolve voucher issue"
+      ],
+      "products": [
+        "voucher",
+        "discount code"
+      ],
+      "risks": [
+        "customer churn",
+        "verbal abuse"
+      ],
+      "outcomes": [
+        "escalation promised"
+      ]
+    },
+    "risk_flags": [
+      "customer churn"
+    ]
+  }
+}

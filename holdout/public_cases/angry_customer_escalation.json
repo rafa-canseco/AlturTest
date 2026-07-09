@@ -1,0 +1,8 @@
+{
+  "id": "angry_customer_escalation",
+  "metadata": {
+    "language": "en",
+    "scenario": "support_escalation"
+  },
+  "transcript": "Agent: Thanks for calling support. Customer: This is ridiculous. Your voucher still does not work and I have called three times. Agent: I can check the voucher and speak with a supervisor. Customer: I want this escalated now or I am canceling. Agent: I understand. I will escalate this case and follow up with a replacement discount code."
+}

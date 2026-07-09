@@ -1,0 +1,8 @@
+{
+  "id": "damaged_order_refund",
+  "metadata": {
+    "language": "en",
+    "scenario": "damaged_order"
+  },
+  "transcript": "Agent: How can I help with your order? Customer: The blender arrived damaged and the box was crushed. I need a refund or replacement. Agent: I am sorry about that. I can open a claim and send return instructions. Customer: Please send the instructions today and confirm when the refund starts."
+}
