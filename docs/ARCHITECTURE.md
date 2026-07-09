@@ -258,7 +258,7 @@ Before production, I would add:
 - dead-letter queue or failed-job review workflow;
 - provider concurrency controls;
 - retention and deletion policies;
-- tag override UI and audit trail;
+- tag override UI and audit trail; currently implemented for the demo, but production would add reviewer identity and approval controls;
 - export/download support for call records;
 - deployment pipeline and environment separation;
 - backup/restore and migration runbooks.
@@ -333,15 +333,20 @@ Evaluator-owned:
 ```sh
 cd holdout
 uv run python -m unittest discover -s tests
+uv run holdout-evaluate \
+  --public-cases-dir public_cases \
+  --actual-dir actual_outputs/baseline \
+  --expected-dir expected \
+  --report reports/baseline.json
 ```
 
 ## Known Tradeoffs
 
-- Local demo storage uses disk, not hosted object storage.
-- Workers are command-line processes, not deployed worker services yet.
+- Local Docker storage uses disk; the deployed demo uses a Railway volume. Production should use private object storage.
+- The deployed preview runs API and workers in one Railway service for shared audio access. Production should split workers into services backed by object storage.
 - No authentication in the current take-home scope.
-- No live deployment yet.
-- Tag overrides have schema support but no completed UI/API workflow yet.
+- A live preview exists on Vercel/Railway.
+- Tag overrides have backend and frontend support.
 - Analytics dashboard is planned but not required for the core submission.
 - Speaker role detection is deferred until diarization quality is verified.
 
@@ -357,4 +362,3 @@ Highest-value next items:
 6. Analytics dashboard.
 7. Speaker roles if provider metadata supports it cleanly.
 8. Auth and multi-user isolation only after core delivery is solid.
-

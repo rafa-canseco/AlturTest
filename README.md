@@ -365,9 +365,17 @@ Holdout evaluator, evaluator-owned only:
 ```sh
 cd holdout
 uv run python -m unittest discover -s tests
+uv run holdout-evaluate \
+  --public-cases-dir public_cases \
+  --actual-dir actual_outputs/baseline \
+  --expected-dir expected \
+  --report reports/baseline.json
 ```
 
-The holdout design keeps private expected outputs and scoring internals away from implementation agents. Implementation work should receive only safe aggregate failures or behavioral notes.
+The holdout suite includes small synthetic transcript cases for escalation and
+damaged-order workflows. Reports expose aggregate pass/fail, field scores, and
+mismatched field names, not private expected values. Implementation work should
+receive only safe aggregate failures or behavioral notes.
 
 ## Prompt And Tag Quality Strategy
 
@@ -382,6 +390,7 @@ The prompt asks for one aggregate analysis of the full transcript. If an audio f
 Quality should be evaluated over time through:
 
 - holdout transcripts with private expected outputs
+- evaluator reports for sentiment, next action, summary keywords, risk flags, and tag categories
 - schema-invalid output rate
 - tag precision and recall by category
 - sampled human review of summaries and tags
