@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile, status
 
 from app.calls.models import CallRecord
 from app.calls.schemas import CallDetailResponse, CallListResponse, CallSummaryResponse
@@ -22,9 +22,9 @@ router = APIRouter(prefix="/calls", tags=["calls"])
     response_model=CallSummaryResponse,
     status_code=status.HTTP_201_CREATED,
 )
-async def create_call(request: Request, file: UploadFile = File(...)) -> CallSummaryResponse:
+def create_call(request: Request, file: UploadFile = File(...)) -> CallSummaryResponse:
     service = _call_service(request)
-    content = await file.read()
+    content = file.file.read()
     try:
         record = service.ingest_call(
             filename=file.filename,
@@ -48,10 +48,10 @@ async def create_call(request: Request, file: UploadFile = File(...)) -> CallSum
 
 
 @router.get("", response_model=CallListResponse)
-def list_calls(request: Request) -> CallListResponse:
+def list_calls(request: Request, limit: int = Query(default=50, ge=1, le=100)) -> CallListResponse:
     service = _call_service(request)
     try:
-        calls = service.list_calls()
+        calls = service.list_calls(limit=limit)
     except CallPersistenceError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

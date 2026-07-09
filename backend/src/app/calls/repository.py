@@ -18,7 +18,7 @@ class CallRepository(Protocol):
     def create_call_with_queued_job(self, call: CallCreate) -> CallRecord:
         pass
 
-    def list_calls(self) -> list[CallRecord]:
+    def list_calls(self, *, limit: int = 50) -> list[CallRecord]:
         pass
 
     def get_call(self, call_id: UUID) -> CallRecord | None:
@@ -89,7 +89,7 @@ class PostgresCallRepository:
         except Exception as exc:
             raise CallRepositoryError("Failed to create call and queued job") from exc
 
-    def list_calls(self) -> list[CallRecord]:
+    def list_calls(self, *, limit: int = 50) -> list[CallRecord]:
         try:
             with connect(self._database_url, row_factory=dict_row) as conn:
                 with conn.cursor() as cur:
@@ -98,7 +98,9 @@ class PostgresCallRepository:
                         select *
                         from calls
                         order by uploaded_at desc, id desc
-                        """
+                        limit %(limit)s
+                        """,
+                        {"limit": limit},
                     )
                     return [_call_record_from_row(row) for row in cur.fetchall()]
         except Exception as exc:

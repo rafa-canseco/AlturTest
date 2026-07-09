@@ -116,9 +116,9 @@ class CallService:
                 cleanup_failed=cleanup_failed,
             ) from exc
 
-    def list_calls(self) -> list[CallRecord]:
+    def list_calls(self, *, limit: int = 50) -> list[CallRecord]:
         try:
-            return self._repository.list_calls()
+            return self._repository.list_calls(limit=limit)
         except CallRepositoryError as exc:
             raise CallPersistenceError("Could not list calls") from exc
 

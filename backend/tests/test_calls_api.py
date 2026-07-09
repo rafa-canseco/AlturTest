@@ -122,6 +122,18 @@ def test_list_calls_returns_call_summaries() -> None:
     body = response.json()
     assert [call["filename"] for call in body["calls"]] == ["second.wav", "first.mp3"]
     assert body["calls"][0]["status"] == "queued"
+    assert repository.list_limits == [50]
+
+
+def test_list_calls_honors_limit_query_param() -> None:
+    records = [_record(original_filename=f"call-{index}.mp3") for index in range(3)]
+    repository = FakeCallRepository(records=records)
+    client = _client(repository=repository, storage=FakeCallStorage())
+
+    response = client.get("/calls?limit=2")
+
+    assert response.status_code == 200
+    assert repository.list_limits == [2]
 
 
 def test_get_call_returns_call_detail() -> None:
@@ -160,6 +172,7 @@ class FakeCallRepository:
         self.records = {record.id: record for record in records or []}
         self.created_calls: list[CallCreate] = []
         self.created_jobs: list[UUID] = []
+        self.list_limits: list[int] = []
         self.fail_create = fail_create
 
     def create_call_with_queued_job(self, call: CallCreate) -> CallRecord:
@@ -181,8 +194,9 @@ class FakeCallRepository:
         self.records[record.id] = record
         return record
 
-    def list_calls(self) -> list[CallRecord]:
-        return list(self.records.values())
+    def list_calls(self, *, limit: int = 50) -> list[CallRecord]:
+        self.list_limits.append(limit)
+        return list(self.records.values())[:limit]
 
     def get_call(self, call_id: UUID) -> CallRecord | None:
         return self.records.get(call_id)
