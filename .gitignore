@@ -1,0 +1,4 @@
+.env.docker.local
+
+frontend/.agents/
+frontend/skills-lock.json

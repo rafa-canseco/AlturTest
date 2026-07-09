@@ -54,15 +54,66 @@ More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Requirements
 
-- Python 3.12+
-- `uv`
-- Bun
-- Docker Desktop, for local Supabase Postgres
-- Supabase CLI
+- Docker Desktop, for the one-command demo path
+- Python 3.12+, `uv`, and Bun only if running services manually
 - ElevenLabs API key, for real STT
 - OpenAI API key, for real analysis
 
-## Environment
+## Docker Quickstart
+
+The easiest local demo path uses Docker Compose with local Postgres and local
+filesystem audio storage. It does not require Supabase remote or Supabase API
+keys.
+
+```sh
+cp .env.docker.example .env.docker.local
+```
+
+Edit `.env.docker.local` and add provider credentials:
+
+```text
+ELEVENLABS_API_KEY=<runtime secret>
+OPENAI_API_KEY=<runtime secret>
+```
+
+`.env.docker.local` is intentionally gitignored. Do not commit real API keys.
+
+Start the app:
+
+```sh
+docker compose up --build
+```
+
+Open:
+
+```text
+http://127.0.0.1:5173/
+```
+
+Compose services:
+
+- `db`: local Postgres on the internal Compose network
+- `migrate`: applies committed SQL migrations from `backend/supabase/migrations`
+- `backend`: FastAPI API on `http://127.0.0.1:8000`
+- `worker-stt`: ElevenLabs STT worker
+- `worker-analysis`: OpenAI analysis worker
+- `frontend`: Vite frontend on `http://127.0.0.1:5173`
+
+Useful commands:
+
+```sh
+docker compose ps
+docker compose logs -f backend worker-stt worker-analysis
+docker compose down
+docker compose down -v  # also clears local DB/audio volumes
+```
+
+Docker uses local Postgres plus the backend's `LocalCallStorage` mounted at
+`/data/storage`. Supabase remote is not used for the Docker demo. Supabase
+remains a production-compatible option because the schema is plain Postgres and
+the storage contract is explicit.
+
+## Manual Environment
 
 Backend:
 
@@ -71,7 +122,7 @@ cd backend
 cp .env.example .env
 ```
 
-Required local values:
+Required local values for the manual Supabase-CLI path:
 
 ```text
 DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres
@@ -96,9 +147,9 @@ cp .env.example .env
 VITE_API_BASE_URL=http://127.0.0.1:8000
 ```
 
-Never commit real API keys or local `.env` files.
-
 ## Local Setup
+
+Skip this section if using Docker Compose.
 
 Install backend dependencies:
 
@@ -174,6 +225,9 @@ For one-shot local debugging, add `--once` to a worker command.
 POST /calls
 GET /calls?limit=50
 GET /calls/{call_id}
+GET /calls/{call_id}/tag-overrides
+POST /calls/{call_id}/tag-overrides
+DELETE /calls/{call_id}/tag-overrides/{override_id}
 GET /health
 ```
 
@@ -185,6 +239,8 @@ Call detail includes:
 - status and client-safe errors
 - transcript, when STT has succeeded
 - analysis summary and tags, when LLM analysis has succeeded
+- structured conversation insights, when generated
+- human tag overrides, stored separately from model output
 - audit events for upload, job claim, STT, analysis, completion, and failure
 
 ## Analysis Schema
@@ -204,7 +260,15 @@ OpenAI analysis is requested with a strict JSON schema and validated before pers
   "intent": "request information",
   "sentiment": "positive",
   "next_action": "send_info",
-  "risk_flags": []
+  "risk_flags": [],
+  "insights": {
+    "objections": [],
+    "commitments": [],
+    "follow_up_hints": [],
+    "customer_questions": [],
+    "agent_action_items": [],
+    "escalation_notes": []
+  }
 }
 ```
 
@@ -304,9 +368,8 @@ Quality should be evaluated over time through:
 
 ## What I Would Improve With More Time
 
-- Docker Compose for API, frontend, database, and workers.
 - Hosted preview deployment with managed database/storage.
-- Tag override workflow and JSON export.
+- JSON export.
 - Analytics dashboard for status and tag distribution.
 - Speaker role detection if provider diarization is reliable enough.
 - Authentication, tenant isolation, and row-level access controls.
