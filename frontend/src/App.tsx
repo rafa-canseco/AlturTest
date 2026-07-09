@@ -79,7 +79,12 @@ const normalizeSummary = (value: unknown): CallSummary | null => {
       pickString(record, ["filename", "file_name", "name", "original_filename"]) ??
       `Call ${id.slice(0, 8)}`,
     status: normalizeStatus(record.status),
-    createdAt: pickString(record, ["created_at", "createdAt"]),
+    createdAt: pickString(record, [
+      "created_at",
+      "createdAt",
+      "uploaded_at",
+      "uploadedAt",
+    ]),
     updatedAt: pickString(record, ["updated_at", "updatedAt"]),
   };
 };
@@ -89,9 +94,14 @@ const normalizeDetail = (value: unknown): CallDetail | null => {
   const record = toRecord(value);
   if (!summary || !record) return null;
 
+  const transcriptRecord = toRecord(record.transcript);
+
   return {
     ...summary,
-    transcript: pickString(record, ["transcript", "transcription", "text"]),
+    transcript:
+      (transcriptRecord
+        ? pickString(transcriptRecord, ["text", "transcript", "transcription"])
+        : undefined) ?? pickString(record, ["transcript", "transcription", "text"]),
     analysis: record.analysis ?? record.insights ?? record.result,
     errorMessage: pickString(record, [
       "error",
