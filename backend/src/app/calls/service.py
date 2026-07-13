@@ -308,12 +308,21 @@ def _hash_text(value: str) -> str:
 
 
 def _analysis_field_value(analysis: CallAnalysisRecord, field: str) -> object:
-    if field in {"call_outcome", "customer_intent"}:
-        return analysis.tags.get(field)
+    if field == "call_outcome":
+        return _tag_value(analysis.tags, "call_outcome", "outcomes")
+    if field == "customer_intent":
+        return _tag_value(analysis.tags, "customer_intent", "customer_intents")
     if field == "sentiment":
         return analysis.sentiment
     if field == "next_action":
         return analysis.next_action
     if field == "risk_flags":
         return analysis.risk_flags
+    return None
+
+
+def _tag_value(tags: dict[str, object], *keys: str) -> object:
+    for key in keys:
+        if key in tags:
+            return tags[key]
     return None

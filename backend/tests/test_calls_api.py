@@ -743,6 +743,66 @@ def test_create_tag_override_persists_original_value_without_mutating_analysis()
     assert analysis.tags == {"customer_intent": "demo"}
 
 
+def test_create_tag_override_reads_customer_intent_from_plural_analysis_tags() -> None:
+    call = _record(original_filename="sales.mp3", status="completed")
+    analysis = _analysis_record(call_id=call.id, tags={"customer_intents": ["demo"]})
+    repository = FakeCallRepository(
+        records=[call],
+        details={call.id: CallDetailRecord(call=call, analysis=analysis)},
+    )
+    client = _client(repository=repository, storage=FakeCallStorage())
+
+    response = client.post(
+        f"/calls/{call.id}/tag-overrides",
+        json={"field": "customer_intent", "override_value": "pricing"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["original_value"] == ["demo"]
+    assert repository.created_tag_overrides[0].original_value == ["demo"]
+
+
+def test_create_tag_override_reads_call_outcome_from_plural_analysis_tags() -> None:
+    call = _record(original_filename="sales.mp3", status="completed")
+    analysis = _analysis_record(call_id=call.id, tags={"outcomes": ["follow_up"]})
+    repository = FakeCallRepository(
+        records=[call],
+        details={call.id: CallDetailRecord(call=call, analysis=analysis)},
+    )
+    client = _client(repository=repository, storage=FakeCallStorage())
+
+    response = client.post(
+        f"/calls/{call.id}/tag-overrides",
+        json={"field": "call_outcome", "override_value": "closed_won"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["original_value"] == ["follow_up"]
+    assert repository.created_tag_overrides[0].original_value == ["follow_up"]
+
+
+def test_create_tag_override_prefers_legacy_singular_tag_key() -> None:
+    call = _record(original_filename="sales.mp3", status="completed")
+    analysis = _analysis_record(
+        call_id=call.id,
+        tags={"customer_intent": "legacy_demo", "customer_intents": ["new_demo"]},
+    )
+    repository = FakeCallRepository(
+        records=[call],
+        details={call.id: CallDetailRecord(call=call, analysis=analysis)},
+    )
+    client = _client(repository=repository, storage=FakeCallStorage())
+
+    response = client.post(
+        f"/calls/{call.id}/tag-overrides",
+        json={"field": "customer_intent", "override_value": "pricing"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["original_value"] == "legacy_demo"
+    assert repository.created_tag_overrides[0].original_value == "legacy_demo"
+
+
 def test_create_tag_override_uses_top_level_analysis_fields() -> None:
     call = _record(original_filename="sales.mp3", status="completed")
     analysis = _analysis_record(call_id=call.id)
@@ -1152,13 +1212,17 @@ def _job_record(
     )
 
 
-def _analysis_record(*, call_id: UUID) -> CallAnalysisRecord:
+def _analysis_record(
+    *,
+    call_id: UUID,
+    tags: dict[str, object] | None = None,
+) -> CallAnalysisRecord:
     now = _dt("2026-07-08T12:00:00+00:00")
     return CallAnalysisRecord(
         id=uuid4(),
         call_id=call_id,
         summary="Customer requested a product demo.",
-        tags={"customer_intent": "demo"},
+        tags=tags or {"customer_intent": "demo"},
         intent="demo",
         sentiment="positive",
         next_action="schedule_demo",
